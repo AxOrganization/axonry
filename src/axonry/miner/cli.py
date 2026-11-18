@@ -135,6 +135,11 @@ def _prepare(a, r):
     owner, opens = NETWORKS.get(a.network, {}).get("owner"), rules.get("open_block", 0)
     if hk != owner and int(sub.block) < opens:
         raise SystemExit(f"entries open at block {opens} (now {int(sub.block)}): an earlier commitment does not count")
+    if hk != owner:
+        reg = chain.registered_at(hk, rules["netuid"])
+        if reg is not None and chain.owner_of(hk, reg) != chain.owner_of(hk, None):
+            raise SystemExit(f"{hk} changed coldkey since its registration (block {reg}): its entry would be refused "
+                             "(HOTKEY_MOVED); register a hotkey under the coldkey that pays")
     if hk != owner and chain.has_committed(hk, rules["netuid"]):
         raise SystemExit(f"{hk} has committed on subnet {rules['netuid']} before: one registration is one entry "
                          "(only its first commitment counts); use a new hotkey")
