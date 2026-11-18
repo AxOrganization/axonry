@@ -189,7 +189,9 @@ class Orchestrator:
         bound by neither.
         The entry is paid by the coldkey that owned the hotkey at the commitment, for good: nobody can move a hotkey
         under someone else's coldkey (a coldkey swap needs no consent from its destination) and spend that account.
-        For the same reason a hotkey whose coldkey changed since its registration cannot enter."""
+        For the same reason a hotkey not owned by that coldkey since its registration cannot enter (moved by a coldkey
+        swap, or brought in by a hotkey swap). Every chain read happens before the entry is recorded: a failed read is
+        retried with the block, never skipped."""
         owner = c.signer == self.d.owner_keypair.ss58_address
         if not owner and (self.db.of_hotkey(c.signer) or c.block < rules.doc.get("open_block", 0)):
             return
@@ -197,7 +199,8 @@ class Orchestrator:
         rec = {"hotkey": c.signer, "rules_sha256": rules.sha256,
                "content_digest": c.content_digest, "github_id": c.github_id, "timeline": {"committed": c.timestamp}}
         coldkey = self.d.chain.owner_of(c.signer, c.block)
-        reg = None if owner or coldkey is None else self.d.chain.registered_at(c.signer, rules["netuid"], c.block)
+        reg, reg_owner = (None, coldkey) if owner or coldkey is None else \
+            self.d.chain.registration_owner(c.signer, rules["netuid"], c.block)
         first = self.db.first_with_digest(c.content_digest)
         self.db.add_submission(sid, rules["base"], c.signer, coldkey, "WAITING", rec, content_digest=c.content_digest,
                                prio=(c.block, c.extrinsic_index))
@@ -205,9 +208,10 @@ class Orchestrator:
             self._reject(sid, binding.COPY, f"this exact content was committed first by {first['hotkey']} ({first['sid']})")
         elif coldkey is None:
             self._reject(sid, binding.HOTKEY_UNKNOWN, f"{c.signer} had no owning coldkey at its commitment")
-        elif reg is not None and self.d.chain.owner_of(c.signer, reg) != coldkey:
-            self._reject(sid, binding.HOTKEY_MOVED, f"the hotkey's coldkey changed since its registration (block {reg}): "
-                         "register a hotkey under the coldkey that pays")
+        elif reg_owner != coldkey:
+            since = f"its registration (block {reg})" if reg is not None else "its commitment's block"
+            self._reject(sid, binding.HOTKEY_MOVED, f"the hotkey was not owned by {coldkey} since {since}: register a "
+                         "hotkey under the coldkey that pays")
 
     # ------------------------------------------------------------------------------------------- advance
     PRE_LOCK = ("WAITING", "REVIEW")

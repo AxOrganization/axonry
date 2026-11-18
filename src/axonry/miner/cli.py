@@ -136,10 +136,14 @@ def _prepare(a, r):
     if hk != owner and int(sub.block) < opens:
         raise SystemExit(f"entries open at block {opens} (now {int(sub.block)}): an earlier commitment does not count")
     if hk != owner:
-        reg = chain.registered_at(hk, rules["netuid"])
-        if reg is not None and chain.owner_of(hk, reg) != chain.owner_of(hk, None):
-            raise SystemExit(f"{hk} changed coldkey since its registration (block {reg}): its entry would be refused "
-                             "(HOTKEY_MOVED); register a hotkey under the coldkey that pays")
+        try:
+            reg, reg_owner = chain.registration_owner(hk, rules["netuid"], int(sub.block))
+        except Exception as e:  # noqa: BLE001 - the archive node is unreachable: say so rather than commit blind
+            raise SystemExit(f"cannot read the hotkey's registration from an archive node ({str(e)[:120]}); try again")
+        if reg_owner is None or reg_owner != chain.owner_of(hk, None):
+            raise SystemExit(f"{hk} has not been owned by its current coldkey since its registration (a coldkey or "
+                             "hotkey swap): its entry would be refused (HOTKEY_MOVED); register a hotkey under the "
+                             "coldkey that pays")
     if hk != owner and chain.has_committed(hk, rules["netuid"]):
         raise SystemExit(f"{hk} has committed on subnet {rules['netuid']} before: one registration is one entry "
                          "(only its first commitment counts); use a new hotkey")

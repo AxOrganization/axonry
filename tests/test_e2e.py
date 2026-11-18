@@ -76,8 +76,8 @@ class FakeChain:
     def uid_of(self, hk, netuid, block=None):
         return UIDS.get(hk)
 
-    def registered_at(self, hk, netuid, block=None):
-        return 1
+    def registration_owner(self, hk, netuid, block):
+        return 1, self.owner_of(hk, 1)
 
     def uid_hotkeys(self, netuid, block=None):
         return {u: h for h, u in UIDS.items()}
@@ -1223,3 +1223,32 @@ def test_a_hotkey_moved_under_another_coldkey_cannot_spend_it(tmp_path):
     assert (a["status"], a["reason_code"]) == ("REJECTED", "HOTKEY_MOVED")
     assert c["coldkey"] == COLDKEYS["C"] and c["status"] == "QUEUED"
     assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == 0 and orch.db.accounts()[COLDKEYS["B"]]["charged_usd"] == 0
+
+
+def test_a_failed_chain_read_never_skips_the_ownership_check(tmp_path):
+    """The registration's owner is read before the entry is recorded: a failed read retries the block (the entry is
+    then still checked), and a hotkey with no registration at its commitment's block is refused."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.registry_root = registry_copy(tmp_path)
+    real, calls = chain.registration_owner, []
+
+    def flaky(hk, netuid, block):
+        calls.append(hk)
+        if len(calls) == 1:
+            raise ConnectionError("archive node unreachable")
+        if hk == HOTKEYS["B"]:
+            return None, None                              # deregistered later in its commitment's block
+        return 1, COLDKEYS["D"]                            # A's hotkey belonged to D at its registration
+    chain.registration_owner = flaky
+    commit(chain, "A", blobs_for("A"), 101)
+    commit(chain, "B", blobs_for("B"), 102)
+    chain.head = 102
+    orch.d.registry_root = registry_copy(tmp_path, effective_block=100)
+    with pytest.raises(ConnectionError):
+        orch.intake()
+    assert orch.db.subs() == []                            # nothing recorded on a failed read
+    orch.intake()
+    a, b = orch.db.of_hotkey(HOTKEYS["A"]), orch.db.of_hotkey(HOTKEYS["B"])
+    assert (a["status"], a["reason_code"]) == ("REJECTED", "HOTKEY_MOVED")
+    assert (b["status"], b["reason_code"]) == ("REJECTED", "HOTKEY_MOVED")
+    chain.registration_owner = real

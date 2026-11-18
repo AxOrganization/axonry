@@ -97,6 +97,10 @@ class SimChain:
     def uid_of(self, hotkey, netuid, block=None):
         return self.uids.get(hotkey)
 
+    def registration_owner(self, hotkey, netuid, block):
+        """No coldkey swaps in the rehearsal: a hotkey has had its owner since it registered."""
+        return 0, self.owners.get(hotkey)
+
     def uid_hotkeys(self, netuid, block=None):
         return {u: h for h, u in self.uids.items()}
 

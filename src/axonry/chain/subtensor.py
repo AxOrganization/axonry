@@ -7,11 +7,19 @@ ZERO_ACCOUNT = "5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM"   # default of
 
 
 class Chain:
-    def __init__(self, network="finney", subtensor=None):
+    def __init__(self, network="finney", subtensor=None, archive=None):
+        """archive: a node keeping all state (a lite node keeps about the last 300 blocks), for registration_owner."""
         if subtensor is None:
             import bittensor as bt  # noqa: PLC0415
             subtensor = bt.Subtensor(network=network)
-        self.sub = subtensor
+        self.sub, self._archive = subtensor, archive
+
+    @property
+    def archive(self):
+        if self._archive is None:
+            import bittensor as bt  # noqa: PLC0415
+            self._archive = bt.Subtensor(network="archive")
+        return self._archive
 
     @property
     def _S(self):
@@ -26,10 +34,16 @@ class Chain:
         v = str(v) if v else None
         return None if v in (None, ZERO_ACCOUNT) else v
 
-    def registered_at(self, hotkey, netuid, block=None):
-        """The block of the hotkey's current registration on the subnet (as of `block`), or None."""
-        uid = self.uid_of(hotkey, netuid, block)
-        return None if uid is None else int(self.sub.query(self._S.BlockAtRegistration, [netuid, uid], block=block))
+    def registration_owner(self, hotkey, netuid, block):
+        """(block of the hotkey's registration on the subnet as of `block`, its owning coldkey at that block) from an
+        archive node; (None, None) if the hotkey had no uid at `block`. Raises when the chain cannot be read."""
+        uid = self.archive.query(self._S.Uids, [netuid, hotkey], block=block)
+        if uid is None:
+            return None, None
+        reg = int(self.archive.query(self._S.BlockAtRegistration, [netuid, int(uid)], block=block))
+        owner = self.archive.query(self._S.Owner, [hotkey], block=reg)
+        owner = str(owner) if owner else None
+        return reg, (None if owner in (None, ZERO_ACCOUNT) else owner)
 
     def uid_of(self, hotkey, netuid, block=None):
         v = self.sub.query(self._S.Uids, [netuid, hotkey], block=block)
