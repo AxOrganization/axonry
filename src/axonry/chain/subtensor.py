@@ -26,6 +26,11 @@ class Chain:
         v = str(v) if v else None
         return None if v in (None, ZERO_ACCOUNT) else v
 
+    def registered_at(self, hotkey, netuid, block=None):
+        """The block of the hotkey's current registration on the subnet (as of `block`), or None."""
+        uid = self.uid_of(hotkey, netuid, block)
+        return None if uid is None else int(self.sub.query(self._S.BlockAtRegistration, [netuid, uid], block=block))
+
     def uid_of(self, hotkey, netuid, block=None):
         v = self.sub.query(self._S.Uids, [netuid, hotkey], block=block)
         return None if v is None else int(v)

@@ -341,7 +341,7 @@ def scenario(world):
     sd = world.commit(dave, d_files)
     world.expect_carried(world.open_pr(dave, d_files), sd)
 
-    # erin commits a placeholder without funds: waits unreviewed; deposits; is reviewed and refused (no fee)
+    # erin commits a placeholder without funds: waits unreviewed; deposits; is reviewed and refused (the review fee kept)
     e_files = {"entry.json": entry(base), "METHOD.md": PLACEHOLDER_METHOD.encode()}
     se = world.commit(erin, e_files)
     world.expect_carried(world.open_pr(erin, e_files), se)
@@ -351,7 +351,7 @@ def scenario(world):
     world.expect_status(sc, "REJECTED", "REVIEW_CHANGES", check="original")
     world.expect_status(sd, "REJECTED", "REVIEW_CHANGES", check="conduct")
     world.expect_status(se, "REJECTED", "REVIEW_CHANGES", check="substantive")
-    world.expect_uncharged((sc, sd, se, sf))
+    world.expect_charged_review_fee_only((sc, sd, se), (sf,))
     world.expect_locked(sa)
 
     # after approval alice pushes something else and commits it again: the locked entry is unaffected and the
@@ -442,9 +442,12 @@ class World:
         s = self.db.sub(sid) or {}
         self.check(f"PR #{n} carries {sid}", ok, f"{s.get('status')} {s.get('reason_code') or ''}")
 
-    def expect_uncharged(self, sids):
-        charged = [r["sid"] for r in self.db.c.execute("SELECT sid FROM charges")]
-        self.check("rejected entries were never charged", not set(sids) & set(charged), f"charged: {charged}")
+    def expect_charged_review_fee_only(self, reviewed, unreviewed):
+        """Entries refused in review paid the review fee and nothing else; those never reviewed paid nothing."""
+        fee = pricing.review_musd(self.rules)
+        got = {s: self.db.charged(s) for s in (*reviewed, *unreviewed)}
+        want = {**{s: ({-2: fee} if fee else {}) for s in reviewed}, **{s: {} for s in unreviewed}}
+        self.check("refused entries paid only the review fee", got == want, f"charged: {got}")
 
     def expect_one_entry(self, m, sid, timeout=120):
         time.sleep(timeout)                       # let the void commitment be read

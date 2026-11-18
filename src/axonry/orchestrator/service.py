@@ -186,18 +186,28 @@ class Orchestrator:
         """One registration, one entry: the hotkey's first commitment is its submission (sid = its chain position,
         which is also its priority, fixed for good). A content already committed by another hotkey is a copy.
         Commitments before the rules' open_block count for nothing. The owner's hotkey (its weight is burned) is
-        bound by neither."""
-        if c.signer != self.d.owner_keypair.ss58_address and (
-                self.db.of_hotkey(c.signer) or c.block < rules.doc.get("open_block", 0)):
+        bound by neither.
+        The entry is paid by the coldkey that owned the hotkey at the commitment, for good: nobody can move a hotkey
+        under someone else's coldkey (a coldkey swap needs no consent from its destination) and spend that account.
+        For the same reason a hotkey whose coldkey changed since its registration cannot enter."""
+        owner = c.signer == self.d.owner_keypair.ss58_address
+        if not owner and (self.db.of_hotkey(c.signer) or c.block < rules.doc.get("open_block", 0)):
             return
         sid = make_sid(c.block, c.extrinsic_index)
         rec = {"hotkey": c.signer, "rules_sha256": rules.sha256,
                "content_digest": c.content_digest, "github_id": c.github_id, "timeline": {"committed": c.timestamp}}
+        coldkey = self.d.chain.owner_of(c.signer, c.block)
+        reg = None if owner or coldkey is None else self.d.chain.registered_at(c.signer, rules["netuid"], c.block)
         first = self.db.first_with_digest(c.content_digest)
-        self.db.add_submission(sid, rules["base"], c.signer, None, "WAITING", rec, content_digest=c.content_digest,
+        self.db.add_submission(sid, rules["base"], c.signer, coldkey, "WAITING", rec, content_digest=c.content_digest,
                                prio=(c.block, c.extrinsic_index))
         if first:
             self._reject(sid, binding.COPY, f"this exact content was committed first by {first['hotkey']} ({first['sid']})")
+        elif coldkey is None:
+            self._reject(sid, binding.HOTKEY_UNKNOWN, f"{c.signer} had no owning coldkey at its commitment")
+        elif reg is not None and self.d.chain.owner_of(c.signer, reg) != coldkey:
+            self._reject(sid, binding.HOTKEY_MOVED, f"the hotkey's coldkey changed since its registration (block {reg}): "
+                         "register a hotkey under the coldkey that pays")
 
     # ------------------------------------------------------------------------------------------- advance
     PRE_LOCK = ("WAITING", "REVIEW")
@@ -272,10 +282,7 @@ class Orchestrator:
             else:
                 self._set_stage(s, "WAITING", "BAD_PARENT", why)
             return pr.number
-        coldkey = self.d.chain.owner_of(s["hotkey"], head)
-        if coldkey != s["coldkey"]:
-            self.db.update(sid, coldkey=coldkey)
-            s = self.db.sub(sid)
+        coldkey = s["coldkey"]                  # fixed at the commitment
         short = self._funds(s, rules)
         if short:
             self._set_stage(s, "WAITING", *short)
@@ -325,9 +332,7 @@ class Orchestrator:
         return int(s["record"]["timeline"]["committed"] + h * 3600)
 
     def _funds(self, s, rules):
-        """-> None when the account of the hotkey's coldkey covers a whole run, else (code, detail)."""
-        if s["coldkey"] is None:
-            return binding.HOTKEY_UNKNOWN, f"{s['hotkey']} has no owning coldkey on chain"
+        """-> None when the account of the coldkey paying for the entry covers a whole run, else (code, detail)."""
         paid = sum(self.db.charged(s["sid"]).values())          # its review fee, once charged, is part of the run
         if self.db.available(s["coldkey"], besides=s["sid"]) < pricing.run_cost_musd(rules) - paid:
             return binding.INSUFFICIENT_FUNDS, "insufficient funds"

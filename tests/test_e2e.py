@@ -23,6 +23,7 @@ from axonry.pool.machine import Machine
 from axonry_validator import main as validator
 
 OWNER = Keypair.create_from_uri("//Alice")
+OWNER_COLDKEY = Keypair.create_from_uri("//AliceStash").ss58_address
 TREASURY = Keypair.create_from_uri("//Treasury").ss58_address
 NETUID = 99
 HOTKEYS = {n: Keypair.create_from_uri(f"//hk{n}").ss58_address for n in "ABCD"}
@@ -70,10 +71,13 @@ class FakeChain:
         return self.blocks.get(b, [])
 
     def owner_of(self, hk, block):
-        return next(COLDKEYS[n] for n, h in HOTKEYS.items() if h == hk)
+        return next((COLDKEYS[n] for n, h in HOTKEYS.items() if h == hk), OWNER_COLDKEY)
 
     def uid_of(self, hk, netuid, block=None):
         return UIDS.get(hk)
+
+    def registered_at(self, hk, netuid, block=None):
+        return 1
 
     def uid_hotkeys(self, netuid, block=None):
         return {u: h for h, u in UIDS.items()}
@@ -1196,3 +1200,26 @@ def test_the_review_fee_is_kept_when_review_refuses_and_is_part_of_a_run(tmp_pat
     used = pricing.used_musd(orch.rules_for(sid_b), clock.t - kick)
     assert sum(orch.db.charged(sid_b).values()) == used                  # the run's cost; the fee went back
     assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == 0
+
+
+def test_a_hotkey_moved_under_another_coldkey_cannot_spend_it(tmp_path):
+    """A coldkey swap needs no consent from its destination. A hotkey moved under coldkey B after its registration
+    cannot enter (it would spend B's account); a hotkey moved after its commitment is still paid by the coldkey that
+    owned it then."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.registry_root = registry_copy(tmp_path)
+    moved = {}                                            # hotkey -> (from block, new coldkey)
+    plain = chain.owner_of
+    chain.owner_of = lambda hk, block: (moved[hk][1] if hk in moved and block >= moved[hk][0] else plain(hk, block))
+    deposit(chain, "B", 100, 2 * FEE)                     # B has money; A has none
+    moved[HOTKEYS["A"]] = (50, COLDKEYS["B"])             # A's hotkey moved under B before A commits
+    pay(orch, chain, "C", 103, 1)                         # C pays for itself, then its hotkey moves under B
+    commit(chain, "A", blobs_for("A"), 101)
+    orch.d.github.add_pr(9, HOTKEYS["A"], "a9", blobs_for("A"))
+    moved[HOTKEYS["C"]] = (104, COLDKEYS["B"])
+    chain.head = 110
+    open_rules(orch, 100)
+    a, c = orch.db.of_hotkey(HOTKEYS["A"]), orch.db.of_hotkey(HOTKEYS["C"])
+    assert (a["status"], a["reason_code"]) == ("REJECTED", "HOTKEY_MOVED")
+    assert c["coldkey"] == COLDKEYS["C"] and c["status"] == "QUEUED"
+    assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == 0 and orch.db.accounts()[COLDKEYS["B"]]["charged_usd"] == 0
