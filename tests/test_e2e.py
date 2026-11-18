@@ -1304,3 +1304,26 @@ def test_a_champions_pr_is_merged_even_if_github_fails_once(tmp_path):
     assert orch.db.champion(BASE)["sid"] == sid and failed == [1]
     orch.settle_prs()
     assert gh.merged == [1] and gh.prs[1]["state"] == "closed" and orch.db.sub(sid)["record"]["pr_result"]["closed"]
+
+
+
+def test_index_follows_a_new_rules_version_of_the_same_base(tmp_path):
+    """A later rules version of the line in force (e.g. a review fee from block 130) is what miners read from
+    index.json as soon as it takes effect, not only when the weights are next issued."""
+    from axonry.common.canon import write_json
+    orch, chain, clock, pub = make(tmp_path)
+    root = registry_copy(tmp_path, effective_block=100)
+    orch.d.registry_root = root
+    rules = json.loads(next((root / "rules" / BASE).glob("*.json")).read_text())
+    write_json(root / "rules" / BASE / "v2.json", {**rules, "effective_block": 130,       # deployed, staged
+                                                   "fee": {**rules["fee"], "review_usd": 20}})
+    chain.head = 120
+    orch.intake()
+    orch.bootstrap()
+    v1 = json.loads(pub.get(layout.INDEX))["rules"]
+    orch.refresh_weights()
+    assert json.loads(pub.get(layout.INDEX))["rules"] == v1             # staged, not in force yet
+    chain.head = 131
+    orch.refresh_weights()
+    idx = json.loads(pub.get(layout.INDEX))
+    assert idx["rules"] != v1 and json.loads(pub.get(idx["rules"]))["fee"]["review_usd"] == 20

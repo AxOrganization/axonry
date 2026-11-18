@@ -902,7 +902,7 @@ class Orchestrator:
 
     def refresh_weights(self, max_age=86400):
         """Re-issue weights.json when it is old, another base model's line is in force, the owner's burned share
-        changed, or the champion's uid changed (re-registration)."""
+        changed, or the champion's uid changed (re-registration). index.json follows the rules version in force."""
         raw = self.d.public.get(layout.WEIGHTS)
         if raw is None:
             return self.publish_weights()
@@ -914,6 +914,9 @@ class Orchestrator:
         burn = cur.get("burn", 0.0) != self.d.burn             # the owner changed the burned share
         if moved or new_base or burn or self.d.clock() - cur.get("issued_at", 0) > max_age:
             self.publish_weights()
+        elif rules is not None and (json.loads(self.d.public.get(layout.INDEX) or "{}").get("rules")
+                                    != layout.rules_version(rules.sha256)):
+            publisher.publish_index(self.d.public, rules, self.d.registry_root)    # a new rules version took effect
 
     def publish_status(self, every=60):
         """status.json: everything in priority order - the review queue (reviewers take it top-down), the run queue,
