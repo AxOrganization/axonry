@@ -22,8 +22,8 @@ Every external system is injected (see Deps), so the whole flow runs against fak
 
 Status values (public): WAITING REVIEW QUEUED RUNNING COLLECTING ADMITTED SCORED PUBLISHED REJECTED FAILED
 DISQUALIFIED
-Reason codes (public, stable): intake.binding (NO_PR, INSUFFICIENT_FUNDS, COPY, ...); CONFLICT, REVIEW_CHANGES,
-BAD_PARENT; NO_UPLOAD, BAD_UPLOAD, REJECTED_RULES, EVAL_ERROR; decisions NEW_CHAMPION, NOT_DOMINATING.
+Reason codes (public, stable): intake.binding (NO_PR, INSUFFICIENT_FUNDS, COPY, REVEAL_EXPIRED, ...); CONFLICT,
+REVIEW_CHANGES, BAD_PARENT; NO_UPLOAD, BAD_UPLOAD, REJECTED_RULES, EVAL_ERROR; decisions NEW_CHAMPION, NOT_DOMINATING.
 """
 import io
 import json
@@ -52,6 +52,12 @@ from ..publish import publisher, redact
 from .db import DB
 
 log = logging.getLogger("axonry")
+
+
+def _utc(ts) -> str:
+    """A public reason's time: unix seconds -> 'YYYY-MM-DD HH:MM UTC'."""
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(ts))
+
 
 def without_secrets(task: dict) -> dict:
     """The task as kept at rest (DB and its snapshots): the sandbox key and the R2 credentials are only ever in the
@@ -222,6 +228,8 @@ class Orchestrator:
         """WAITING / REVIEW -> what the submission still lacks, in this order; -> the number of its PR, if any.
           a PR carrying it   an open PR in the hotkey's directory, by the committed GitHub id, with the committed
                              content (the PR is only the carrier: it can be rebased, or closed and another opened)
+          revealed in time   with the rules' reveal_hours, the first PR carrying it is opened within that time of
+                             the commitment; past it with no such PR the entry is void (REJECTED REVEAL_EXPIRED)
           valid content      entry.json and files (the content can never change: invalid is final)
           funds              the account of the coldkey owning the hotkey covers a whole run (besides what its
                              other locked entries hold); nothing is charged before the run
@@ -229,14 +237,24 @@ class Orchestrator:
           approved           -> locked (tag axonry/<sid>), holding the run's maximum cost, QUEUED"""
         sid, rec = s["sid"], s["record"]
         pr = next((p for p in sorted(prs, key=lambda p: p.number) if binding.carrier_problem(s, p) is None), None)
+        by = None if s["pr_number"] else self._reveal_by(s)       # once a PR has carried it, the content is public
         if pr is None:
+            if by is not None and self.now() > by:
+                self._reject(sid, binding.REVEAL_EXPIRED, f"no PR carried the committed content by {_utc(by)} "
+                             f"({self._reveal_hours(s):g} h after the commitment)")
+                return None
             return self._set_stage(s, "WAITING", binding.NO_PR, "no open PR carries the committed content yet "
-                                   "(see status.json prs for PRs in this hotkey's directory)")
+                                   "(see status.json prs for PRs in this hotkey's directory)"
+                                   + (f"; open it by {_utc(by)} or the entry is void" if by is not None else ""))
         if s["pr_number"] != pr.number or s["head_sha"] != pr.head:
             self.db.update(sid, pr_number=pr.number, head_sha=pr.head, record_patch={"pr": {
                 "repo": getattr(self.d.github, "repo", None), "number": pr.number, "author": pr.author,
                 "directory": pr.directory, "title": pr.title, "head": pr.head}})
             s = self.db.sub(sid)
+        if by is not None and pr.opened_at is not None and pr.opened_at > by:     # GitHub's time, not our tick's
+            self._reject(sid, binding.REVEAL_EXPIRED, f"PR #{pr.number} was opened at {_utc(pr.opened_at)}, after "
+                         f"the reveal deadline {_utc(by)} ({self._reveal_hours(s):g} h after the commitment)")
+            return pr.number
         rules = self.rules_for(sid)
         entry = binding.check_content(self.d.github.dir_blobs(pr.head, pr.directory), rules, self.d.comp_rules)
         if isinstance(entry, binding.Rejected):
@@ -281,6 +299,20 @@ class Orchestrator:
                 "timeline": {**rec.get("timeline", {}), "entered": self.now()}})
             self._set_stage(self.db.sub(sid), "QUEUED", None, None)
         return pr.number
+
+    def _reveal_hours(self, s):
+        """The rules' reveal_hours for this submission (None: no reveal deadline)."""
+        h = self.rules_for(s["sid"]).doc.get("reveal_hours")
+        return None if h is None else float(h)
+
+    def _reveal_by(self, s):
+        """The latest time (unix) at which the first PR carrying the committed content may be opened: reveal_hours
+        after the commitment's block (None: no deadline). Until a PR carries it nobody can see the content its
+        priority belongs to; without a deadline a miner could commit several contents from several hotkeys, wait,
+        and open a PR only for the one that matches a later entry once that one is public, taking review and
+        decision ahead of it."""
+        h = self._reveal_hours(s)
+        return None if h is None else int(s["record"]["timeline"]["committed"] + h * 3600)
 
     def _funds(self, s, rules):
         """-> None when the account of the hotkey's coldkey covers a whole run, else (code, detail)."""

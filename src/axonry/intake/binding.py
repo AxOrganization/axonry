@@ -6,6 +6,8 @@ takes only from a registered hotkey) is its one submission, for good. Its money 
 transfers from the coldkey that owns the hotkey, and the fee is charged to that coldkey's account at approval.
 A PR carries the submission when it is open in submissions/<hotkey>/<entry>/, by the committed GitHub id, with
 exactly the committed content, and was opened after the commitment's block. A content committed earlier by another hotkey is a copy.
+When the rules set reveal_hours, the first PR carrying it must also be opened within that many hours of the
+commitment: a commitment whose content nobody can see must not hold its priority indefinitely.
 """
 import json
 
@@ -14,6 +16,7 @@ NO_PR = "NO_PR"                          # no open PR carries the committed cont
 UNCOMMITTED = "UNCOMMITTED"              # a PR whose hotkey has no commitment, or does not match it
 PARTICIPATED = "PARTICIPATED"            # a PR of a hotkey whose one entry is already locked or over
 COPY = "COPY"                            # the committed content was committed earlier by another hotkey (final)
+REVEAL_EXPIRED = "REVEAL_EXPIRED"        # no PR carried the committed content within the rules' reveal_hours (final)
 HOTKEY_UNKNOWN = "HOTKEY_UNKNOWN"        # the hotkey has no owning coldkey on chain: nobody to charge
 INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS"
 BAD_PR = "BAD_PR"

@@ -112,7 +112,10 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
    (`open_block`); an earlier one is void. The pull request must touch that hotkey's directory, be opened by that
    GitHub account (the id is looked up from your login; unlike a login it can never pass to someone else) after the
    commitment's block, and hold exactly the committed content. So nobody else can enter in your name or spend your
-   funds. Keep the hotkey safe: it commits, and so it spends that account.
+   funds. Keep the hotkey safe: it commits, and so it spends that account. If the rules set `reveal_hours`, open
+   the pull request within that time of the commitment's block: a commitment whose content no pull request has
+   carried by then is void (`REJECTED REVEAL_EXPIRED`), so a commitment cannot keep an unseen priority and be
+   revealed only once a later, public entry shows that it matches.
 5. **The pull request only carries the content.** Rebasing it, or closing it and opening another with the same
    content, changes nothing. The content itself can never change: a different version is not your entry (and a
    second commitment of the hotkey is ignored).

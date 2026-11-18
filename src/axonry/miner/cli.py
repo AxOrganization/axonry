@@ -13,7 +13,7 @@
   axonry-miner commit --dir DIR --github LOGIN [--wallet W] [--hotkey H] [--yes]
         the entry of hotkey H, once: set_commitment "<digest>:<GitHub id of LOGIN>" signed by H (registered on the
         subnet; from the rules' open_block on); only a PR by LOGIN, in H's directory, opened after the commitment,
-        with exactly this content can carry it
+        with exactly this content can carry it (and, if the rules set reveal_hours, opened within that time)
   W and H are bittensor wallet and hotkey names (default: "default", as in btcli).
 One registration is one entry: only a hotkey's first commitment counts, and the content and GitHub account it names
 can never change. Commit first and push only after the command returns: a content belongs to its earliest commitment,
@@ -161,6 +161,9 @@ def cmd_commit(a, r):
     blk, i = submit_commitment(sub, wallet, rules["netuid"], commitment)
     print(f"committed in block {blk} extrinsic {i} (this content's priority). Now push it to your PR, opened by "
           f"{a.github}. Never push content before its commitment is in a block: whoever commits it first owns it.")
+    if rules.get("reveal_hours") is not None:
+        print(f"Open the PR within {float(rules['reveal_hours']):g} h of this block: an entry whose content no PR "
+              "carries by then is void (REVEAL_EXPIRED).")
 
 
 def cmd_deposit(a, r):

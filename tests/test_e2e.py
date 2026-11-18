@@ -1003,6 +1003,128 @@ def test_a_pr_opened_before_its_commitment_carries_nothing(tmp_path):
     assert s["reason_code"] == "NO_PR" and "opened before" in orch.db.get("prs")["1"]["reason"]
 
 
+def _unseen_a_public_b(orch, chain):
+    """A commits at block 101 and opens no PR; B commits at 105 and opens its PR (B's content is public)."""
+    deposit(chain, "A", 101)
+    commit(chain, "A", blobs_for("A"), 101)
+    nb = pay(orch, chain, "B", 105, 1)
+    chain.head = 105
+    open_rules(orch, 101)
+    return "0000000101-0001", "0000000105-0001", nb
+
+
+def test_without_a_reveal_deadline_a_late_reveal_goes_first(tmp_path):
+    """The case reveal_hours closes. Without it, a commitment can stay unseen for as long as its owner likes: A opens
+    its PR a month after B's content became public and still goes ahead of B in the review queue (so B is compared
+    with A, not A with B) and in decisions."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.bootstrap()
+    gh = orch.d.github
+    gh.approve_all = False                              # both stay in review: the review queue shows the order
+    sa, sb, nb = _unseen_a_public_b(orch, chain)
+    assert orch.db.sub(sa)["reason_code"] == "NO_PR" and orch.db.sub(sb)["status"] == "REVIEW"
+    clock.t = Clock.t + 30 * 24 * 3600
+    gh.add_pr(nb + 1, HOTKEYS["A"], "a1", blobs_for("A"))
+    gh.prs[nb + 1]["opened_at"] = clock.t
+    orch.intake()
+    orch.publish_status()
+    assert [r["sid"] for r in json.loads(pub.get(layout.STATUS))["review"]] == [sa, sb]
+
+
+def test_a_commitment_not_revealed_in_time_is_void(tmp_path):
+    """With reveal_hours, a commitment whose content no PR carries within that time of its block is void
+    (REVEAL_EXPIRED, final): a PR opened afterwards carries nothing, and the public entry after it keeps its place."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.registry_root = registry_copy(tmp_path, reveal_hours=24)
+    orch.bootstrap()
+    gh = orch.d.github
+    gh.approve_all = False
+    sa, sb, nb = _unseen_a_public_b(orch, chain)
+    s = orch.db.sub(sa)
+    assert s["reason_code"] == "NO_PR" and "or the entry is void" in s["reason"]
+    clock.t = Clock.t + 23 * 3600                       # within the deadline: still waiting
+    orch.intake()
+    assert orch.db.sub(sa)["status"] == "WAITING"
+    clock.t = Clock.t + 25 * 3600
+    orch.intake()
+    s = orch.db.sub(sa)
+    assert (s["status"], s["reason_code"]) == ("REJECTED", "REVEAL_EXPIRED")
+    gh.add_pr(nb + 1, HOTKEYS["A"], "a1", blobs_for("A"))
+    gh.prs[nb + 1]["opened_at"] = clock.t
+    orch.intake()
+    orch.publish_status()
+    st = json.loads(pub.get(layout.STATUS))
+    assert [r["sid"] for r in st["review"]] == [sb]
+    assert next(p for p in st["prs"] if p["pr"] == nb + 1)["reason_code"] == "PARTICIPATED"
+    assert orch.db.sub(sa)["status"] == "REJECTED"
+
+
+def test_the_reveal_deadline_is_github_time_not_our_tick(tmp_path):
+    """The deadline is judged on the PR's own opening time: a PR opened after it is too late even if no tick ran in
+    between, and one opened in time counts even if first seen after it (an outage of ours costs a miner nothing)."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.registry_root = registry_copy(tmp_path, reveal_hours=24)
+    orch.bootstrap()
+    gh = orch.d.github
+    for n, block in (("A", 101), ("B", 102)):
+        deposit(chain, n, block)
+        commit(chain, n, blobs_for(n), block)
+    gh.add_pr(1, HOTKEYS["A"], "a1", blobs_for("A"))
+    gh.prs[1]["opened_at"] = Clock.t + 25 * 3600        # after the deadline
+    gh.add_pr(2, HOTKEYS["B"], "b1", blobs_for("B"))
+    gh.prs[2]["opened_at"] = Clock.t + 23 * 3600        # in time
+    clock.t = Clock.t + 30 * 3600                       # both first seen after the deadline
+    chain.head = 102
+    open_rules(orch, 101)
+    a, b = orch.db.sub("0000000101-0001"), orch.db.sub("0000000102-0001")
+    assert (a["status"], a["reason_code"]) == ("REJECTED", "REVEAL_EXPIRED")
+    assert "after the reveal deadline" in a["reason"]
+    assert gh.prs[1]["state"] == "closed" and any(n == 1 and "REVEAL_EXPIRED" in t for n, t in gh.comments)
+    assert b["status"] == "QUEUED"
+
+
+def test_once_revealed_a_later_carrier_is_fine(tmp_path):
+    """The deadline is for the first reveal only: once a PR has carried the content it is public, and closing that PR
+    and opening another one later (the PR is only the carrier) changes nothing."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.registry_root = registry_copy(tmp_path, reveal_hours=24)
+    orch.bootstrap()
+    gh = orch.d.github
+    gh.approve_all = False
+    deposit(chain, "A", 101)
+    commit(chain, "A", blobs_for("A"), 101)
+    gh.add_pr(1, HOTKEYS["A"], "a1", blobs_for("A"))
+    gh.prs[1]["opened_at"] = Clock.t + 3600
+    clock.t = Clock.t + 3600
+    chain.head = 101
+    open_rules(orch, 101)
+    sid = "0000000101-0001"
+    assert orch.db.sub(sid)["status"] == "REVIEW"
+    gh.close(1)
+    clock.t = Clock.t + 48 * 3600
+    orch.intake()
+    s = orch.db.sub(sid)
+    assert (s["status"], s["reason_code"]) == ("WAITING", "NO_PR") and "void" not in s["reason"]
+    gh.add_pr(2, HOTKEYS["A"], "a2", blobs_for("A"))
+    gh.prs[2]["opened_at"] = clock.t
+    orch.intake()
+    assert orch.db.sub(sid)["status"] == "REVIEW" and orch.db.sub(sid)["pr_number"] == 2
+
+
+def test_no_reveal_hours_no_deadline(tmp_path):
+    """Rules without reveal_hours (every version so far) keep today's behaviour: an unrevealed commitment waits."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.bootstrap()
+    deposit(chain, "A", 101)
+    commit(chain, "A", blobs_for("A"), 101)
+    chain.head = 101
+    open_rules(orch, 101)
+    clock.t = Clock.t + 365 * 24 * 3600
+    orch.intake()
+    s = orch.db.sub("0000000101-0001")
+    assert (s["status"], s["reason_code"]) == ("WAITING", "NO_PR") and "void" not in s["reason"]
+
+
 def test_an_entry_shows_starting_while_its_machine_sets_up(tmp_path):
     orch, chain, clock, pub = make(tmp_path)
     orch.bootstrap()
