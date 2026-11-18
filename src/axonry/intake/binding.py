@@ -3,7 +3,7 @@
 A miner is a hotkey: it holds the registration, signs its commitment and gets the weight. One registration is one
 entry: the hotkey's first commitment on the subnet ("<content digest>:<GitHub id>", set_commitment, which the chain
 takes only from a registered hotkey) is its one submission, for good. Its money is the account of the coldkey that
-owned the hotkey at the commitment (fixed then; a hotkey not owned by that coldkey since its registration cannot
+owned the hotkey at the commitment (fixed then; a hotkey whose owner changed since its registration cannot
 enter): deposits are transfers from that coldkey.
 A PR carries the submission when it is open in submissions/<hotkey>/<entry>/, by the committed GitHub id, with
 exactly the committed content, and was opened after the commitment's block. A content committed earlier by another hotkey is a copy.
@@ -19,7 +19,7 @@ PARTICIPATED = "PARTICIPATED"            # a PR of a hotkey whose one entry is a
 COPY = "COPY"                            # the committed content was committed earlier by another hotkey (final)
 REVEAL_EXPIRED = "REVEAL_EXPIRED"        # no PR carried the committed content within the rules' reveal_hours (final)
 HOTKEY_UNKNOWN = "HOTKEY_UNKNOWN"        # the hotkey had no owning coldkey at its commitment: nobody to charge (final)
-HOTKEY_MOVED = "HOTKEY_MOVED"            # the hotkey was not owned by its coldkey since its registration (final)
+HOTKEY_MOVED = "HOTKEY_MOVED"            # the hotkey's owner changed since its registration (final)
 INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS"
 BAD_PR = "BAD_PR"
 BAD_ENTRY = "BAD_ENTRY"

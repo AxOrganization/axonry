@@ -18,9 +18,6 @@
   axonry-orchestrator registry pin-bench KEY            items_manifest_sha256 from wsp.data.manifest (needs the toolkit)
   axonry-orchestrator registry pin-competition          competition commit + rules.json sha256 into the latest rules
   axonry-orchestrator publish-registry                  publish definitions to the public bucket
-  axonry-orchestrator rehearse [--hours H --limit N --samples K --review-command CMD --fresh]
-                                                     dress rehearsal: real orchestrator, reviewer, machines,
-                                                     arbos, R2, evaluation; simulated chain, GitHub and miners
 Configuration: config/axonry.toml (see config/example.toml); secrets from the environment.
 """
 import argparse
@@ -110,7 +107,7 @@ def cached_price(ttl=300, retry=60, lookup=pricing.tao_usd_at, clock=time.time):
 def deps(cfg: Config, db, rules, comp_rules, **parts):
     """The orchestrator's dependencies: the rented machines, the agent backend, R2 credentials and the evaluation
     machine from the configuration; the chain, GitHub, public store, owner key and PR scan given (production in
-    build, simulated in rehearse). Any default can be overridden through parts."""
+    build). Any default can be overridden through parts."""
     from .. import creds  # noqa: PLC0415
     from ..agent.factory import make_runner  # noqa: PLC0415
     from .service import Deps  # noqa: PLC0415
@@ -118,12 +115,12 @@ def deps(cfg: Config, db, rules, comp_rules, **parts):
     fl, runner = fleet(cfg, db, rules), make_runner(cfg)
 
     def issue(store, prefix, ttl):
-        """Temporary credentials for one prefix of the store the orchestrator itself uses (its bucket, its
-        namespace): what a machine writes there is exactly what the orchestrator then reads or publishes."""
+        """Temporary credentials for one prefix of the store the orchestrator itself uses: what a machine writes
+        there is exactly what the orchestrator then reads or publishes."""
         if getattr(store, "bucket", None) is None:
             raise RuntimeError("temporary credentials need an R2 store (storage.backend = r2)")
         return creds.issue(cfg.require("r2.account_id"), cfg.secret("r2.cf_api_token"),
-                           cfg.secret("r2.temp_parent_access_key_id"), store.bucket, store.namespace + prefix, ttl,
+                           cfg.secret("r2.temp_parent_access_key_id"), store.bucket, prefix, ttl,
                            cfg.require("r2.endpoint"))
     return Deps(**{
         "db": db, "fleet": fl, "runner": runner, "executor": eval_executor(cfg, fl), "issue_creds": issue,
@@ -228,12 +225,11 @@ def cmd_restore(cfg, a):
 
 
 def cmd_calibrate(cfg, a):
-    from ..evaluation.calibrate import calibrate  # noqa: PLC0415
-    from .rehearsal import overridden_registry  # noqa: PLC0415
+    from ..evaluation.calibrate import calibrate, scaled_registry  # noqa: PLC0415
     rules = registry.latest_rules()
     root = registry.ROOT
     if a.limit or a.samples:   # a scaled copy of the registry, never committed
-        root = overridden_registry(Path(".state/calibrate/registry"), limit=a.limit, samples=a.samples)
+        root = scaled_registry(Path(".state/calibrate/registry"), limit=a.limit, samples=a.samples)
         rules = registry.load_rules_versions(rules["base"], root)[-1]
     from ..pool.machine import EVAL  # noqa: PLC0415
     from .db import DB  # noqa: PLC0415
@@ -311,12 +307,6 @@ def main(argv=None):
     ca.add_argument("--samples", type=int, help="samples per item (default: the definitions')")
     rs = sub.add_parser("restore-state", help="replace the local state DB by a snapshot (default: the latest)")
     rs.add_argument("--key")
-    t = sub.add_parser("rehearse", help="dress rehearsal on real infrastructure (owner tooling)")
-    t.add_argument("--hours", type=float, default=1.5, help="agent run length")
-    t.add_argument("--limit", type=int, default=40, help="items per benchmark")
-    t.add_argument("--samples", type=int, default=1)
-    t.add_argument("--review-command", help="reviewer model command (default: review.auto.DEFAULT_COMMAND)")
-    t.add_argument("--fresh", action="store_true")
     sub.add_parser("publish-registry")
     dq = sub.add_parser("disqualify", help="public owner ruling: an evaluated submission broke the rules")
     dq.add_argument("sid")
@@ -338,10 +328,6 @@ def main(argv=None):
     cfg = Config.load(a.config)
     if a.cmd == "run":
         cmd_run(cfg, a)
-    elif a.cmd == "rehearse":
-        from .rehearsal import run as rehearse  # noqa: PLC0415
-        results = rehearse(cfg, a.hours, a.limit, a.samples, a.fresh, a.review_command)
-        print(f"{sum(r['ok'] for r in results)}/{len(results)} checks passed; report: .state/rehearsal/REPORT.md")
         return 0 if all(r["ok"] for r in results) else 1
     elif a.cmd == "status":
         cmd_status(cfg, a)

@@ -53,12 +53,11 @@ def public_store(cfg: Config):
                    cfg.secret("r2.secret_access_key"), public=True)
 
 
-def private_store(cfg: Config, namespace="", public=False):
-    """The private bucket; with a namespace, a corner of it (a rehearsal keeps its public and private files there,
-    so nothing of it reaches the real buckets' keys)."""
+def private_store(cfg: Config):
+    """The private bucket."""
     if cfg.get("storage.backend", "r2") == "local":
         from .store import LocalStore  # noqa: PLC0415
-        return LocalStore(cfg.path_of("storage.local_private") / namespace, public=public)
+        return LocalStore(cfg.path_of("storage.local_private"))
     from .store import R2Store  # noqa: PLC0415
     return R2Store(cfg.require("r2.endpoint"), cfg.require("r2.private_bucket"), cfg.secret("r2.access_key_id"),
-                   cfg.secret("r2.secret_access_key"), public=public, namespace=namespace)
+                   cfg.secret("r2.secret_access_key"))

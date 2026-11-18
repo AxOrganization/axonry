@@ -83,20 +83,18 @@ class LocalStore:
 
 
 class R2Store:
-    """bucket on Cloudflare R2 through the S3 API. Credentials may be a temporary triple (with session token).
-    namespace: every key lives under it (a rehearsal's own corner of a bucket); "" in production."""
+    """bucket on Cloudflare R2 through the S3 API. Credentials may be a temporary triple (with session token)."""
 
-    def __init__(self, endpoint, bucket, access_key_id, secret_access_key, session_token=None, public=False,
-                 namespace=""):
+    def __init__(self, endpoint, bucket, access_key_id, secret_access_key, session_token=None, public=False):
         import boto3  # noqa: PLC0415
 
-        self.bucket, self.public, self.namespace = bucket, public, namespace
+        self.bucket, self.public = bucket, public
         self.s3 = boto3.client("s3", endpoint_url=endpoint, region_name="auto", aws_access_key_id=access_key_id,
                                aws_secret_access_key=secret_access_key, aws_session_token=session_token)
 
     def get(self, key):
         try:
-            return self.s3.get_object(Bucket=self.bucket, Key=self.namespace + key)["Body"].read()
+            return self.s3.get_object(Bucket=self.bucket, Key=key)["Body"].read()
         except self.s3.exceptions.NoSuchKey:
             return None
 
@@ -108,32 +106,31 @@ class R2Store:
     def put(self, key, data, content_type="application/json"):
         if not _check_write_once(self, key, data, self.public):
             return
-        self.s3.put_object(Bucket=self.bucket, Key=self.namespace + key, Body=data, ContentType=content_type,
+        self.s3.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type,
                            **self._cache(key))
 
     def put_file(self, key, path, content_type="application/octet-stream"):
         if self.public and not layout.is_mutable(key) and self.last_modified(key) is not None:
             return  # immutable large object already present (callers verify by manifest sha)
-        self.s3.upload_file(str(path), self.bucket, self.namespace + key,
+        self.s3.upload_file(str(path), self.bucket, key,
                             ExtraArgs={"ContentType": content_type, **self._cache(key)})
 
     def list(self, prefix):
-        n = len(self.namespace)
-        for page in self.s3.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=self.namespace + prefix):
+        for page in self.s3.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=prefix):
             for o in page.get("Contents", []):
-                yield o["Key"][n:], o["Size"]
+                yield o["Key"], o["Size"]
 
     def delete_prefix(self, prefix):
         keys, n = [k for k, _ in self.list(prefix)], 0
         for i in range(0, len(keys), 1000):
             batch = keys[i:i + 1000]
             self.s3.delete_objects(Bucket=self.bucket,
-                                   Delete={"Objects": [{"Key": self.namespace + k} for k in batch]})
+                                   Delete={"Objects": [{"Key": k} for k in batch]})
             n += len(batch)
         return n
 
     def last_modified(self, key):
         try:
-            return self.s3.head_object(Bucket=self.bucket, Key=self.namespace + key)["LastModified"].timestamp()
+            return self.s3.head_object(Bucket=self.bucket, Key=key)["LastModified"].timestamp()
         except Exception:
             return None

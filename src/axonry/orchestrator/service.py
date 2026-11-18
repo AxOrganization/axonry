@@ -189,9 +189,8 @@ class Orchestrator:
         bound by neither.
         The entry is paid by the coldkey that owned the hotkey at the commitment, for good: nobody can move a hotkey
         under someone else's coldkey (a coldkey swap needs no consent from its destination) and spend that account.
-        For the same reason a hotkey not owned by that coldkey since its registration cannot enter (moved by a coldkey
-        swap, or brought in by a hotkey swap). Every chain read happens before the entry is recorded: a failed read is
-        retried with the block, never skipped."""
+        For the same reason a hotkey whose owner changed since its registration cannot enter. Every chain read
+        happens before the entry is recorded: a failed read is retried with the block, never skipped."""
         owner = c.signer == self.d.owner_keypair.ss58_address
         if not owner and (self.db.of_hotkey(c.signer) or c.block < rules.doc.get("open_block", 0)):
             return
@@ -208,10 +207,9 @@ class Orchestrator:
             self._reject(sid, binding.COPY, f"this exact content was committed first by {first['hotkey']} ({first['sid']})")
         elif coldkey is None:
             self._reject(sid, binding.HOTKEY_UNKNOWN, f"{c.signer} had no owning coldkey at its commitment")
-        elif reg_owner != coldkey:
-            since = f"its registration (block {reg})" if reg is not None else "its commitment's block"
-            self._reject(sid, binding.HOTKEY_MOVED, f"the hotkey was not owned by {coldkey} since {since}: register a "
-                         "hotkey under the coldkey that pays")
+        elif reg is not None and reg_owner != coldkey:
+            self._reject(sid, binding.HOTKEY_MOVED, f"the hotkey's owner changed since its registration (block {reg}): "
+                         "its entry cannot be paid by its new owner")
 
     # ------------------------------------------------------------------------------------------- advance
     PRE_LOCK = ("WAITING", "REVIEW")
@@ -287,6 +285,10 @@ class Orchestrator:
                 self._set_stage(s, "WAITING", "BAD_PARENT", why)
             return pr.number
         coldkey = s["coldkey"]                  # fixed at the commitment
+        if coldkey is None:                     # recorded before the payer was fixed at intake: the owner at its block
+            coldkey = self.d.chain.owner_of(s["hotkey"], s["prio_block"])
+            self.db.update(sid, coldkey=coldkey)
+            s = self.db.sub(sid)
         short = self._funds(s, rules)
         if short:
             self._set_stage(s, "WAITING", *short)

@@ -4,7 +4,6 @@ from axonry import pricing
 from axonry.chain.extrinsics import Commitment, Deposit, parse_extrinsic
 from axonry.common.digest import content_digest, content_digest_of_blobs
 from axonry.common.ids import make_commitment, make_sid, parse_commitment
-from axonry.orchestrator.rehearsal import commit_call
 from axonry.intake import binding
 from axonry.intake.github import submission_dir
 
@@ -151,3 +150,10 @@ def test_a_deposit_is_priced_once_the_sources_are_back():
     assert len(calls) == 1                         # not hammered within the retry window
     up[0], now[0] = True, now[0] + 61
     assert price(1_800_000_000)[0] == 200.0 and price(1_800_000_100)[0] == 200.0 and len(calls) == 2
+
+
+def commit_call(netuid, text):
+    """A Commitments.set_commitment call as the chain decodes it."""
+    raw = text.encode()
+    return {"call_module": "Commitments", "call_function": "set_commitment", "call_args": [
+        {"name": "netuid", "value": netuid}, {"name": "info", "value": {"fields": [{f"Raw{len(raw)}": "0x" + raw.hex()}]}}]}
