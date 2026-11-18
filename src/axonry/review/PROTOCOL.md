@@ -30,8 +30,8 @@ A waiting submission goes to review (`REVIEW`) when
 - the content passes the static checks and names a published parent if any (invalid content can never be fixed:
   `REJECTED`),
 - and the account of the coldkey that owns the hotkey (deposits come from that coldkey, each in USD at the price of
-  its block) covers a whole run at its maximum cost, besides what the coldkey's other locked entries hold. Nothing
-  is charged yet.
+  its block) covers a whole run at its maximum cost, besides what the coldkey's other locked entries hold. Going to
+  review then costs the review fee (`fee.review_usd`): kept if review refuses the entry, part of its run otherwise.
 
 So nobody can enter in someone else's name (only the hotkey signs, and the commitment names the GitHub account),
 spend someone else's funds (only the owner's account pays), enter an exact copy, or hold an unseen priority
@@ -64,7 +64,7 @@ On every tick, for each submission in `WAITING` or `REVIEW`, the orchestrator re
 | Review on the committed content | Result |
 |---|---|
 | none yet | `REVIEW` |
-| changes requested | `REJECTED REVIEW_CHANGES` (the reviewer's text); nothing charged; the hotkey's entry is spent |
+| changes requested | `REJECTED REVIEW_CHANGES` (the reviewer's text); the review fee is kept; the hotkey's entry is spent |
 | approved, PR conflicts with the main branch | `WAITING CONFLICT` (rebase: the content, so the approval, stays) |
 | approved | **locked** (tag `axonry/<sid>` at that commit), holding the run's maximum cost, `QUEUED` |
 

@@ -7,7 +7,7 @@ One registration, one entry: a hotkey's first commitment on the subnet is its su
             account) and participants (a hotkey's first commitment -> its submission, WAITING; an exact copy of
             earlier content -> REJECTED COPY)
   advance   WAITING/REVIEW: a PR carrying the committed content? valid content? the account covers a whole run?
-            -> REVIEW; review: changes -> REJECTED (nothing charged); approved -> locked (tag axonry/<sid>) -> QUEUED
+            -> REVIEW (the review fee is charged); review: changes -> REJECTED (the fee is kept); approved -> locked (tag axonry/<sid>) -> QUEUED
   schedule  QUEUED in priority order: a rented machine each (up to max_concurrent); when it is ready, the run's
             agent gets it + R2 creds -> RUNNING. A run whose machine vanishes runs again, nothing charged
   supervise RUNNING -> agent steps until the deadline (or an early finish), charged each full hour; export log;
@@ -52,6 +52,7 @@ from ..publish import publisher, redact
 from .db import DB
 
 log = logging.getLogger("axonry")
+REVIEW_FEE, REVIEW_FEE_BACK = -2, -3      # charge numbers (db.charge)
 
 
 def _utc(ts) -> str:
@@ -232,8 +233,9 @@ class Orchestrator:
                              the commitment; past it with no such PR the entry is void (REJECTED REVEAL_EXPIRED)
           valid content      entry.json and files (the content can never change: invalid is final)
           funds              the account of the coldkey owning the hotkey covers a whole run (besides what its
-                             other locked entries hold); nothing is charged before the run
-          the review         none -> REVIEW; changes requested -> REJECTED (final, nothing charged)
+                             other locked entries hold); then the review fee is charged, once (it counts towards
+                             the run, or is kept if review refuses the entry)
+          the review         none -> REVIEW; changes requested -> REJECTED (final, the review fee kept)
           approved           -> locked (tag axonry/<sid>), holding the run's maximum cost, QUEUED"""
         sid, rec = s["sid"], s["record"]
         pr = next((p for p in sorted(prs, key=lambda p: p.number) if binding.carrier_problem(s, p) is None), None)
@@ -275,6 +277,9 @@ class Orchestrator:
         if short:
             self._set_stage(s, "WAITING", *short)
             return pr.number
+        fee = pricing.review_musd(rules)
+        if fee and s["hotkey"] != self.d.owner_keypair.ss58_address:   # going to review costs the review fee, once
+            self.db.charge(sid, REVIEW_FEE, coldkey, fee)
         verdict, body = self.d.github.review_state(pr.number, s["content_digest"], pr.directory,
                                                    rules["review"]["reviewers"])
         if verdict == "changes":
@@ -312,13 +317,16 @@ class Orchestrator:
         and open a PR only for the one that matches a later entry once that one is public, taking review and
         decision ahead of it."""
         h = self._reveal_hours(s)
-        return None if h is None else int(s["record"]["timeline"]["committed"] + h * 3600)
+        if h is None or s["hotkey"] == self.d.owner_keypair.ss58_address:
+            return None
+        return int(s["record"]["timeline"]["committed"] + h * 3600)
 
     def _funds(self, s, rules):
         """-> None when the account of the hotkey's coldkey covers a whole run, else (code, detail)."""
         if s["coldkey"] is None:
             return binding.HOTKEY_UNKNOWN, f"{s['hotkey']} has no owning coldkey on chain"
-        if self.db.available(s["coldkey"], besides=s["sid"]) < pricing.run_cost_musd(rules):
+        paid = sum(self.db.charged(s["sid"]).values())          # its review fee, once charged, is part of the run
+        if self.db.available(s["coldkey"], besides=s["sid"]) < pricing.run_cost_musd(rules) - paid:
             return binding.INSUFFICIENT_FUNDS, "insufficient funds"
         return None
 
@@ -513,7 +521,8 @@ class Orchestrator:
 
     def _bill(self, s, end=None, agent_usd=None):
         """A run's GPUs are charged one hour's price at each full hour from kickoff; at its end the GPU time actually
-        used is settled (charge 0) and the agent's model use is charged (charge -1, at most run.max_agent_usd)."""
+        used is settled (charge 0), the agent's model use is charged (charge -1, at most run.max_agent_usd) and the
+        review fee paid on entering review is given back (charge -3): a run costs what it used."""
         rules, kick = self.rules_for(s["sid"]), s["record"]["timeline"]["kickoff"]
         hours = min(int((self.now() - kick) // 3600), int(rules["run"]["hours"]))
         for n in range(1, hours + 1):
@@ -522,6 +531,9 @@ class Orchestrator:
             rest = pricing.used_musd(rules, end - kick) - sum(v for n, v in self.db.charged(s["sid"]).items() if n > 0)
             self.db.charge(s["sid"], 0, s["coldkey"], max(rest, 0))
             self.db.charge(s["sid"], -1, s["coldkey"], pricing.agent_musd(rules, agent_usd))
+            fee = self.db.charged(s["sid"]).get(REVIEW_FEE)
+            if fee:                       # the run's charges are its cost: the review fee goes back
+                self.db.charge(s["sid"], REVIEW_FEE_BACK, s["coldkey"], -fee)
 
     # ------------------------------------------------------------------------------------------- evaluation machine
     def eval_machine(self):

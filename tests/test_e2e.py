@@ -323,6 +323,8 @@ def registry_copy(tmp_path, **rules_patch):
     root = tmp_path / "registry"
     if not root.exists():
         shutil.copytree(registry.ROOT, root)
+        for extra in sorted((root / "rules" / BASE).glob("*.json"))[1:]:   # the tests patch one rules version
+            extra.unlink()
     rules_file = next((root / "rules" / BASE).glob("*.json"))
     doc = json.loads(rules_file.read_text())
     doc["fee"]["assets"] = ["tao", "alpha"]             # the tests pay in both
@@ -1161,3 +1163,35 @@ def test_the_line_is_published_from_the_start(tmp_path):
     orch.bootstrap()
     line = json.loads(pub.get(layout.line(RULES["base"])))
     assert line["champion"] is None and line["entries"] == [] and line["history"] == []
+
+
+def test_the_review_fee_is_kept_when_review_refuses_and_is_part_of_a_run(tmp_path):
+    """fee.review_usd is charged when an entry goes to review. A refused entry keeps it charged (the cost of a bad or
+    abusive entry); an entry that runs is charged only what its run used, the fee counting towards it. An account
+    covering exactly one run still runs after paying it."""
+    orch, chain, clock, pub = make(tmp_path)
+    fee = {**RULES["fee"], "assets": ["tao", "alpha"], "review_usd": 20}
+    orch.d.registry_root = registry_copy(tmp_path, fee=fee)
+    gh = orch.d.github
+    gh.approve_all = False
+    for n, block in (("A", 101), ("B", 102)):
+        pay(orch, chain, n, block, 1)
+    chain.head = 102
+    open_rules(orch, 100)
+    sid_a, sid_b = "0000000101-0001", "0000000102-0001"
+    assert orch.db.charged(sid_a) == {-2: 20 * pricing.MUSD} and orch.db.sub(sid_a)["status"] == "REVIEW"
+    gh.verdicts[(1, content_digest_of_blobs(blobs_for("A")))] = "changes"
+    gh.verdicts[(2, content_digest_of_blobs(blobs_for("B")))] = "approved"
+    orch.intake()
+    assert orch.db.sub(sid_a)["status"] == "REJECTED" and orch.db.charged(sid_a) == {-2: 20 * pricing.MUSD}
+    s = orch.db.sub(sid_b)
+    assert s["status"] == "QUEUED"                       # B paid the fee and its account (one run) still covers the run
+    assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == RUN_USD - 20
+    orch.schedule()
+    kick = clock.t
+    clock.t = kick + 3600 + 600
+    orch.d.fleet.done.add(sid_b)
+    orch.supervise()
+    used = pricing.used_musd(orch.rules_for(sid_b), clock.t - kick)
+    assert sum(orch.db.charged(sid_b).values()) == used                  # the run's cost; the fee went back
+    assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == 0

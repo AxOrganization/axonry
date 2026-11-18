@@ -20,8 +20,8 @@ can never change. Commit first and push only after the command returns: a conten
 and content pushed before it is committed can be copied and committed first by others. The run is paid by the
 GPU-hour plus its agent's model use, from the account of the coldkey owning the hotkey: deposit from that coldkey,
 as plain transfers (this tool), not via proxies or multisig. The account must cover a whole run before review
-(`price`); each full GPU hour is charged as it passes, the rest and the agent's use when the run ends. A rejected
-review costs nothing, but the hotkey's entry is spent.
+(`price`); going to review costs the review fee, which counts towards the run, or is kept if review refuses the
+entry; each full GPU hour is charged as it passes, the rest and the agent's use when the run ends.
 """
 import argparse
 import json
@@ -85,8 +85,11 @@ def cmd_price(r, network):
               + f" now: {pad - 1:.0%} more than held is recommended, for the price moving before the block ({note})")
     except Exception as e:  # noqa: BLE001 - the price sources are unreachable from here: the USD figures stand
         print(f"  now      no price available here ({str(e)[:120]})")
-    print("Nothing is charged until the run starts. Each full GPU hour is charged as it passes; the rest of the GPU time\n"
-          "and the agent's use when the run ends. A deposit counts in USD at the price of its block.")
+    review = rules["fee"].get("review_usd")
+    if review:
+        print(f"  review   {review:.2f} USD when the entry goes to review: part of the run, kept if review refuses it")
+    print("Each full GPU hour is charged as it passes; the rest of the GPU time and the agent's use when the run ends.\n"
+          "A deposit counts in USD at the price of its block.")
 
 
 def asset_usd(network, rules) -> tuple[dict, str]:

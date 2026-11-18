@@ -76,8 +76,9 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
   transfer from any other coldkey does not count for your hotkey. Only plain transfers signed by the coldkey count
   (as made by `axonry-miner deposit`), not transfers through a proxy or multisig.
 - Your entry is reviewed once the account covers a whole run (the maximum cost above), besides what its other
-  queued or running entries still hold. Nothing is charged before the run: a rejected review costs nothing (the hotkey's
-  entry is spent all the same).
+  queued or running entries still hold. Going to review costs the review fee (`fee.review_usd` in the rules): if the
+  entry runs, the fee counts towards the run, which costs only what it used; if review refuses it, the fee is kept
+  (and the hotkey's entry is spent).
 - During the run, each full GPU hour is charged as it passes; when the run ends (at the deadline, or when the
   agent says it is done), the GPU time actually used is settled and the agent's model use is charged (never more
   than the agent budget). A run that ends early costs less; what is left stays in the account. The clock

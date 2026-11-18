@@ -60,6 +60,11 @@ def used_musd(rules, seconds: float) -> int:
     return min(int(hour_musd(rules) * max(seconds, 0) / 3600), gpu_max_musd(rules))
 
 
+def review_musd(rules) -> int:
+    """fee.review_usd: charged when an entry goes to review; kept if it never runs, otherwise part of its run's cost."""
+    return int(round(rules["fee"].get("review_usd", 0) * MUSD))
+
+
 def agent_musd(rules, usd: float | None) -> int:
     """The agent charge: what its model use cost, capped at the agent budget."""
     return min(int(max(usd or 0, 0) * MUSD), agent_max_musd(rules))
