@@ -121,19 +121,36 @@ class Orchestrator:
         self._publish_line(self.db.sub(sid)["base"])
         self._close_pr(sid, f"axonry: submission `{sid}` -> **{final_status} {code}**: {detail[:1000]}")
 
+    FINAL = ("PUBLISHED", "REJECTED", "FAILED", "DISQUALIFIED")
+
     def _close_pr(self, sid, text, merge_commit=None):
         """A finished entry's PR: the result as a comment, a champion's locked commit merged, and the PR closed (an
-        open PR is an entry still in progress: later entries are compared only with those)."""
-        n = self.db.sub(sid)["pr_number"]
-        if not n:
-            return
+        open PR is an entry still in progress: later entries are compared only with those). Recorded first and
+        carried out step by step until done (settle_prs: GitHub may fail any of them)."""
+        if self.db.sub(sid)["pr_number"]:
+            self.db.update(sid, record_patch={"pr_result": {"text": text, "merge": merge_commit}})
+            self._settle_pr(self.db.sub(sid))
+
+    def settle_prs(self):
+        for s in self.db.subs(status=self.FINAL):
+            r = s["record"].get("pr_result")
+            if r and not r.get("closed"):
+                self._settle_pr(s)
+
+    def _settle_pr(self, s):
+        r, n = dict(s["record"]["pr_result"]), s["pr_number"]
         try:
-            self.d.github.comment(n, text)
-            if merge_commit:          # the locked commit itself, whatever the PR head is now
-                self.d.github.merge(merge_commit, f"Champion {sid} (PR #{n})")
+            if not r.get("commented"):
+                self.d.github.comment(n, r["text"])
+                r["commented"] = True
+            if r.get("merge") and not r.get("merged"):   # the locked commit itself, whatever the PR head is now
+                self.d.github.merge(r["merge"], f"Champion {s['sid']} (PR #{n})")
+                r["merged"] = True
             self.d.github.close(n)
+            r["closed"] = True
         except Exception:
-            log.exception("report to PR #%s", n)
+            log.exception("PR #%s of %s (tried again next tick)", n, s["sid"])
+        self.db.update(s["sid"], record_patch={"pr_result": r})
 
     # ------------------------------------------------------------------------------------------- intake
     def intake(self):
@@ -192,9 +209,9 @@ class Orchestrator:
         For the same reason a hotkey whose owner changed since its registration cannot enter. Every chain read
         happens before the entry is recorded: a failed read is retried with the block, never skipped."""
         owner = c.signer == self.d.owner_keypair.ss58_address
-        if not owner and (self.db.of_hotkey(c.signer) or c.block < rules.doc.get("open_block", 0)):
-            return
         sid = make_sid(c.block, c.extrinsic_index)
+        if self.db.sub(sid) or (not owner and (self.db.of_hotkey(c.signer) or c.block < rules.doc.get("open_block", 0))):
+            return                                  # already read (a block is read again after a failed read)
         rec = {"hotkey": c.signer, "rules_sha256": rules.sha256,
                "content_digest": c.content_digest, "github_id": c.github_id, "timeline": {"committed": c.timestamp}}
         coldkey = self.d.chain.owner_of(c.signer, c.block)
@@ -354,7 +371,8 @@ class Orchestrator:
     # ------------------------------------------------------------------------------------------- schedule
     def schedule(self):
         """QUEUED (locked) submissions get a machine each in priority order, while fewer than max_concurrent runs hold
-        one; a run starts when its machine is ready (setup time is ours). Runs may finish out of order; decisions
+        one (an entry that waits for a machine keeps every later one waiting too, but never stops a machine already
+        rented from being set up); a run starts when its machine is ready (setup time is ours). Runs may finish out of order; decisions
         never do (see decide). A machine whose run is over is released; a run whose machine vanished runs again."""
         live = {s["sid"]: s for s in self.db.subs(status=("QUEUED", "RUNNING"))}
         for m in self.d.fleet.active():
@@ -364,18 +382,21 @@ class Orchestrator:
             elif s and s["status"] == "RUNNING" and self.d.fleet.vanished(m["name"]):
                 self._run_lost(s, "its machine vanished")
         held = sum(1 for m in self.d.fleet.active() if m["name"] != EVAL)
+        renting = True          # machines are rented in priority order: once one cannot be, none after it is
         for s in sorted(self.db.subs(status=("QUEUED",)), key=self.priority):
             if not self._due(s):
                 continue
             sid, rules = s["sid"], self.rules_for(s["sid"])
             if self.d.fleet.get(sid) is None:
-                if held >= self.d.max_concurrent:
-                    return
+                if not renting or held >= self.d.max_concurrent:
+                    renting = False
+                    continue
                 try:
                     self.d.fleet.rent(sid, rules["run"]["gpu_model"], rules["run"]["gpus"])
                     held += 1
-                except NoMachine:       # all busy: the queue waits, in order
-                    return
+                except NoMachine:       # all busy: the queue waits, in order (machines already held go on)
+                    renting = False
+                    continue
                 except Exception as e:  # no offer, vast.ai down, a host unreachable: ours, retried
                     self._backoff(s, f"renting a machine: {e}")
                     continue
@@ -408,7 +429,6 @@ class Orchestrator:
         self.d.private.delete_prefix(layout.staging_prefix(sid))
         tl = {k: v for k, v in s["record"]["timeline"].items() if k not in ("kickoff", "deadline")}
         self.db.update(sid, "QUEUED", record_patch={"timeline": tl})
-        self._publish_record(sid)
 
     def _provision(self, s, rules):
         sid, rec = s["sid"], s["record"]
@@ -706,8 +726,8 @@ class Orchestrator:
                         return self._backoff(s, f"base evaluation: {e}")
                     return self._failed(s, "evaluation", e)
                 for key, out in outs.items():
+                    publisher.publish_results(self.d.public, model_id, key, out)   # first: redone if it fails
                     self.db.put_results(model_id, key, parse(out))
-                    publisher.publish_results(self.d.public, model_id, key, out)
                 if model_id.startswith("base:"):
                     self._publish_base_score(model_id, rules)
             self._recovered(s)
@@ -994,7 +1014,7 @@ class Orchestrator:
                  "directory": (s["record"].get("pr") or {}).get("directory"),
                  "priority": [s["prio_block"], s["prio_index"]]}
                 for s in sorted(self.db.subs(), key=self.priority)
-                if s["pr_number"] and s["status"] not in ("PUBLISHED", "REJECTED", "FAILED", "DISQUALIFIED")]
+                if s["pr_number"] and s["status"] not in self.FINAL]
 
     def janitor(self, every=3600, keep_snapshots=8):
         """Hourly: what finished submissions leave behind - their staging upload and local work directory (task bundle
@@ -1011,7 +1031,7 @@ class Orchestrator:
 
     ROLES = {
         # fast, time-critical: deadlines, machines and the queue must never wait for a benchmark run
-        "main": ("intake", "schedule", "supervise", "decide", "refresh_weights", "publish_status",
+        "main": ("intake", "schedule", "supervise", "decide", "settle_prs", "refresh_weights", "publish_status",
                  "janitor", "snapshot_state", "keep_agents"),
         # slow GPU work on the evaluation machine (admission builds, benchmark generation): its own process
         "eval": ("eval_machine", "collect", "evaluate"),

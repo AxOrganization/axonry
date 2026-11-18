@@ -813,6 +813,8 @@ def test_a_vanished_machine_runs_again_at_no_cost(tmp_path):
     assert s["status"] == "RUNNING" and s["record"]["timeline"]["kickoff"] == clock.t and orch.db.charged(sa) == {}
     assert orch.db.sub(sb)["status"] == "QUEUED"                                        # priority kept
     assert orch.db.accounts()[COLDKEYS["A"]]["held_usd"] == RUN_USD
+    run_until_quiet(orch, clock)                        # the run that was lost once still takes the title
+    assert orch.db.champion(BASE)["sid"] == sa and 1 in orch.d.github.merged
 
 
 def test_a_failed_start_keeps_the_machine(tmp_path):
@@ -1255,3 +1257,50 @@ def test_a_failed_chain_read_never_skips_the_ownership_check(tmp_path):
     assert (a["status"], a["reason_code"]) == ("REJECTED", "HOTKEY_MOVED")
     assert b["reason_code"] != "HOTKEY_MOVED"             # no registration to compare with: not checked
     chain.registration_owner = real
+
+
+
+def test_a_waiting_entry_never_stalls_a_machine_already_rented(tmp_path):
+    """Machines are rented in priority order, but an earlier entry that cannot get one (here: backing off, then the
+    only slot is taken) must not stop a later entry's machine from being set up and its run from starting."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.max_concurrent = 1
+    for n, block in (("A", 101), ("B", 102)):
+        pay(orch, chain, n, block, 1)
+    chain.head = 102
+    open_rules(orch, 101)
+    sa, sb = "0000000101-0001", "0000000102-0001"
+    orch.db.set(f"backoff:{sa}:until", clock.t + 600)  # A's rent failed a moment ago
+    plain = orch.d.fleet.rent
+
+    def rent_booting(purpose, gpu, gpus):
+        plain(purpose, gpu, gpus)
+        orch.d.fleet.db.set_machine(purpose, state="booting")
+    orch.d.fleet.rent = rent_booting
+    orch.schedule()
+    assert orch.d.fleet.get(sb)["state"] == "booting" and orch.db.sub(sb)["status"] == "QUEUED"
+    clock.t += 601                                      # A is due again; the only slot is B's
+    orch.d.fleet.db.set_machine(sb, state="ready")
+    orch.schedule()
+    assert orch.db.sub(sb)["status"] == "RUNNING" and orch.d.fleet.get(sa) is None
+
+
+def test_a_champions_pr_is_merged_even_if_github_fails_once(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    plain, failed = gh.comment, []
+
+    def flaky(number, text):
+        if not failed:
+            failed.append(number)
+            raise ConnectionError("GitHub hiccup")
+        plain(number, text)
+    gh.comment = flaky
+    run_until_quiet(orch, clock)
+    sid = "0000000101-0001"
+    assert orch.db.champion(BASE)["sid"] == sid and failed == [1]
+    orch.settle_prs()
+    assert gh.merged == [1] and gh.prs[1]["state"] == "closed" and orch.db.sub(sid)["record"]["pr_result"]["closed"]
