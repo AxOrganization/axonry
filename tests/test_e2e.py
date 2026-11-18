@@ -1184,6 +1184,7 @@ def test_the_review_fee_is_kept_when_review_refuses_and_is_part_of_a_run(tmp_pat
     gh.verdicts[(2, content_digest_of_blobs(blobs_for("B")))] = "approved"
     orch.intake()
     assert orch.db.sub(sid_a)["status"] == "REJECTED" and orch.db.charged(sid_a) == {-2: 20 * pricing.MUSD}
+    assert json.loads(pub.get(layout.submission(sid_a, "submission.json")))["fee"]["charged_usd"] == 20   # kept for good
     s = orch.db.sub(sid_b)
     assert s["status"] == "QUEUED"                       # B paid the fee and its account (one run) still covers the run
     assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == RUN_USD - 20

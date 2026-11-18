@@ -113,7 +113,10 @@ class Orchestrator:
         return int(self.d.clock())
 
     def _reject(self, sid, code, detail, final_status="REJECTED"):
-        self.db.update(sid, final_status, reason_code=code, reason=detail, decided_at=self.d.clock())
+        charged = self.db.charged(sid)        # e.g. the review fee of an entry refused in review: kept in its record
+        patch = {"fee": {**self.db.sub(sid)["record"].get("fee", {}), "charged_usd": sum(charged.values()) / 1e6}}
+        self.db.update(sid, final_status, reason_code=code, reason=detail, decided_at=self.d.clock(),
+                       record_patch=patch if charged else None)
         self._publish_record(sid)
         self._publish_line(self.db.sub(sid)["base"])
         self._close_pr(sid, f"axonry: submission `{sid}` -> **{final_status} {code}**: {detail[:1000]}")
