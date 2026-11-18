@@ -73,7 +73,7 @@ def without_secrets(task: dict) -> dict:
 @dataclass
 class Deps:
     db: DB
-    chain: object                 # .finalized_head() .items_in_block(b, treasury, netuid) .owner_of .uid_of .alpha_price .uid_hotkeys
+    chain: object                 # .finalized_head() .items_in_block(b, treasury, netuid) .owner_of .uid_of .registration_owner .alpha_price .uid_hotkeys
     github: object                # intake.github.GitHub-like: scan(), dir_blobs(commit, dir)
     fleet: object                 # pool.Machines: owned hosts, then vast.ai (runs, evaluation)
     issue_creds: object           # (store, prefix, ttl) -> creds.TempCreds for that prefix of that store
@@ -253,12 +253,18 @@ class Orchestrator:
           the review         none -> REVIEW; changes requested -> REJECTED (final, the review fee kept)
           approved           -> locked (tag axonry/<sid>), holding the run's maximum cost, QUEUED"""
         sid, rec = s["sid"], s["record"]
+        rules = self.rules_for(sid)
         pr = next((p for p in sorted(prs, key=lambda p: p.number) if binding.carrier_problem(s, p) is None), None)
-        by = None if s["pr_number"] else self._reveal_by(s)       # once a PR has carried it, the content is public
+        # reveal deadline: until a PR carries it nobody sees the content its priority belongs to; without a deadline a
+        # miner could commit several contents and reveal only the one a later, public entry shows to match (once a PR
+        # has carried it the content is public; the owner's hotkey is not bound)
+        hours = None if s["pr_number"] or s["hotkey"] == self.d.owner_keypair.ss58_address \
+            else rules.doc.get("reveal_hours")
+        by = None if hours is None else int(rec["timeline"]["committed"] + float(hours) * 3600)
         if pr is None:
             if by is not None and self.now() > by:
                 self._reject(sid, binding.REVEAL_EXPIRED, f"no PR carried the committed content by {_utc(by)} "
-                             f"({self._reveal_hours(s):g} h after the commitment)")
+                             f"({float(hours):g} h after the commitment)")
                 return None
             return self._set_stage(s, "WAITING", binding.NO_PR, "no open PR carries the committed content yet "
                                    "(see status.json prs for PRs in this hotkey's directory)"
@@ -270,9 +276,8 @@ class Orchestrator:
             s = self.db.sub(sid)
         if by is not None and pr.opened_at is not None and pr.opened_at > by:     # GitHub's time, not our tick's
             self._reject(sid, binding.REVEAL_EXPIRED, f"PR #{pr.number} was opened at {_utc(pr.opened_at)}, after "
-                         f"the reveal deadline {_utc(by)} ({self._reveal_hours(s):g} h after the commitment)")
+                         f"the reveal deadline {_utc(by)} ({float(hours):g} h after the commitment)")
             return pr.number
-        rules = self.rules_for(sid)
         entry = binding.check_content(self.d.github.dir_blobs(pr.head, pr.directory), rules, self.d.comp_rules)
         if isinstance(entry, binding.Rejected):
             self._reject(sid, entry.code, entry.detail)
@@ -285,10 +290,6 @@ class Orchestrator:
                 self._set_stage(s, "WAITING", "BAD_PARENT", why)
             return pr.number
         coldkey = s["coldkey"]                  # fixed at the commitment
-        if coldkey is None:                     # recorded before the payer was fixed at intake: the owner at its block
-            coldkey = self.d.chain.owner_of(s["hotkey"], s["prio_block"])
-            self.db.update(sid, coldkey=coldkey)
-            s = self.db.sub(sid)
         short = self._funds(s, rules)
         if short:
             self._set_stage(s, "WAITING", *short)
@@ -320,22 +321,6 @@ class Orchestrator:
                 "timeline": {**rec.get("timeline", {}), "entered": self.now()}})
             self._set_stage(self.db.sub(sid), "QUEUED", None, None)
         return pr.number
-
-    def _reveal_hours(self, s):
-        """The rules' reveal_hours for this submission (None: no reveal deadline)."""
-        h = self.rules_for(s["sid"]).doc.get("reveal_hours")
-        return None if h is None else float(h)
-
-    def _reveal_by(self, s):
-        """The latest time (unix) at which the first PR carrying the committed content may be opened: reveal_hours
-        after the commitment's block (None: no deadline). Until a PR carries it nobody can see the content its
-        priority belongs to; without a deadline a miner could commit several contents from several hotkeys, wait,
-        and open a PR only for the one that matches a later entry once that one is public, taking review and
-        decision ahead of it."""
-        h = self._reveal_hours(s)
-        if h is None or s["hotkey"] == self.d.owner_keypair.ss58_address:
-            return None
-        return int(s["record"]["timeline"]["committed"] + h * 3600)
 
     def _funds(self, s, rules):
         """-> None when the account of the coldkey paying for the entry covers a whole run, else (code, detail)."""

@@ -1,5 +1,8 @@
 """Chain access through the bittensor 11 SDK (`bittensor.Subtensor`). Read-only for the orchestrator; the miner CLI
 also uses `submit_commitment` and `submit_deposit`. Only finalized blocks are ever read for intake.
+
+A read of the state at a given block goes to an archive node (a lite node keeps only about the last 300 blocks, so
+intake could not catch up after a longer pause); reads of the current state go to the network's own node.
 """
 from .extrinsics import parse_extrinsic
 
@@ -7,18 +10,19 @@ ZERO_ACCOUNT = "5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM"   # default of
 
 
 class Chain:
-    def __init__(self, network="finney", subtensor=None, archive=None):
-        """archive: a node keeping all state (a lite node keeps about the last 300 blocks), for registration_owner."""
+    def __init__(self, network="finney", subtensor=None):
         if subtensor is None:
             import bittensor as bt  # noqa: PLC0415
             subtensor = bt.Subtensor(network=network)
-        self.sub, self._archive = subtensor, archive
+        self.sub, self.network, self._archive = subtensor, network, None
 
-    @property
-    def archive(self):
+    def _at(self, block):
+        """The node to read the state at `block` from: the archive for a past block, else the network's node."""
+        if block is None:
+            return self.sub
         if self._archive is None:
             import bittensor as bt  # noqa: PLC0415
-            self._archive = bt.Subtensor(network="archive")
+            self._archive = bt.Subtensor(network="archive" if self.network == "finney" else self.network)
         return self._archive
 
     @property
@@ -30,32 +34,30 @@ class Chain:
         return int(self.sub.finalized_block)
 
     def owner_of(self, hotkey, block):
-        v = self.sub.query(self._S.Owner, [hotkey], block=block)
+        v = self._at(block).query(self._S.Owner, [hotkey], block=block)
         v = str(v) if v else None
         return None if v in (None, ZERO_ACCOUNT) else v
 
     def registration_owner(self, hotkey, netuid, block):
-        """(block of the hotkey's registration on the subnet as of `block`, its owning coldkey at that block) from an
-        archive node; (None, None) if the hotkey had no uid at `block`. Raises when the chain cannot be read."""
-        uid = self.archive.query(self._S.Uids, [netuid, hotkey], block=block)
+        """(block of the hotkey's registration on the subnet as of `block`, its owning coldkey at that block);
+        (None, None) if the hotkey had no uid at `block`. Raises when the chain cannot be read."""
+        uid = self.uid_of(hotkey, netuid, block)
         if uid is None:
             return None, None
-        reg = int(self.archive.query(self._S.BlockAtRegistration, [netuid, int(uid)], block=block))
-        owner = self.archive.query(self._S.Owner, [hotkey], block=reg)
-        owner = str(owner) if owner else None
-        return reg, (None if owner in (None, ZERO_ACCOUNT) else owner)
+        reg = int(self._at(block).query(self._S.BlockAtRegistration, [netuid, uid], block=block))
+        return reg, self.owner_of(hotkey, reg)
 
     def uid_of(self, hotkey, netuid, block=None):
-        v = self.sub.query(self._S.Uids, [netuid, hotkey], block=block)
+        v = self._at(block).query(self._S.Uids, [netuid, hotkey], block=block)
         return None if v is None else int(v)
 
     def alpha_price(self, netuid, block):
         """TAO per alpha from the swap runtime API at `block` (authoritative under the swap pallet)."""
-        p = self.sub.prices.alpha_price(netuid, block=block)
+        p = self._at(block).prices.alpha_price(netuid, block=block)
         return float(p["tao_per_alpha"])
 
     def uid_hotkeys(self, netuid, block=None) -> dict:
-        return {int(k): str(v) for k, v in self.sub.query_map(self._S.Keys, [netuid], block=block)}
+        return {int(k): str(v) for k, v in self._at(block).query_map(self._S.Keys, [netuid], block=block)}
 
     def has_committed(self, hotkey, netuid) -> bool:
         """Whether this hotkey ever set a commitment on the subnet (the storage keeps its latest one)."""
@@ -66,10 +68,11 @@ class Chain:
         """The commitments and deposits of one block, in extrinsic order."""
         import bittensor as bt  # noqa: PLC0415
 
-        info = self.sub.block_info(block)
+        node = self._at(block)
+        info = node.block_info(block)
         ts = int(info.timestamp.timestamp())
         status = {}
-        for e in self.sub.query(bt.storage.System.Events, block=block):
+        for e in node.query(bt.storage.System.Events, block=block):
             if e.get("module_id") == "System" and e.get("event_id") in ("ExtrinsicSuccess", "ExtrinsicFailed"):
                 status[e["extrinsic_idx"]] = e["event_id"] == "ExtrinsicSuccess"
         out = []

@@ -128,7 +128,7 @@ def _prepare(a, r):
     digest = content_digest(a.dir)
     sub = bt.Subtensor(network=a.network)
     from ..chain.subtensor import Chain  # noqa: PLC0415
-    chain = Chain(subtensor=sub)
+    chain = Chain(a.network, subtensor=sub)
     if chain.uid_of(hk, rules["netuid"], None) is None:
         raise SystemExit(f"{hk} is not registered on subnet {rules['netuid']}: only a registered hotkey can commit")
     from axonry_validator.network import NETWORKS  # noqa: PLC0415

@@ -53,6 +53,5 @@ def scaled_registry(root: Path, limit=None, samples=None) -> Path:
         doc = registry.load_benchmark(b["key"]).doc
         doc = {**doc, **({"limit": limit} if limit else {}), **({"samples_per_item": samples} if samples else {})}
         write_json(root / "benchmarks" / f"{b['key']}.json", doc)
-    rules = json.loads(json.dumps(latest))
-    write_json(root / "rules" / rules["base"] / "v1.json", rules)
+    write_json(root / "rules" / latest["base"] / "v1.json", latest)
     return root

@@ -104,14 +104,21 @@ def cached_price(ttl=300, retry=60, lookup=pricing.tao_usd_at, clock=time.time):
     return price_at
 
 
-def deps(cfg: Config, db, rules, comp_rules, **parts):
-    """The orchestrator's dependencies: the rented machines, the agent backend, R2 credentials and the evaluation
-    machine from the configuration; the chain, GitHub, public store, owner key and PR scan given (production in
-    build). Any default can be overridden through parts."""
+def build(cfg: Config):
+    """Wire the production dependencies from the configuration."""
     from .. import creds  # noqa: PLC0415
     from ..agent.factory import make_runner  # noqa: PLC0415
-    from .service import Deps  # noqa: PLC0415
+    from ..chain.subtensor import Chain  # noqa: PLC0415
+    from ..common.sign import load_keypair  # noqa: PLC0415
+    from ..intake.github import GitHub, scan  # noqa: PLC0415
+    from .db import DB  # noqa: PLC0415
+    from .service import Deps, Orchestrator  # noqa: PLC0415
 
+    rules = registry.latest_rules()
+    comp_rules = competition_rules(cfg.path_of("competition.local_path"), rules)
+    gh = GitHub(rules["competition"]["repo"], cfg.secret("competition.github_token"))
+    owner = load_keypair(cfg.require("owner.wallet"), cfg.require("owner.hotkey"), cfg.get("owner.path"))
+    db = DB(cfg.path_of("state.db"))
     fl, runner = fleet(cfg, db, rules), make_runner(cfg)
 
     def issue(store, prefix, ttl):
@@ -122,14 +129,15 @@ def deps(cfg: Config, db, rules, comp_rules, **parts):
         return creds.issue(cfg.require("r2.account_id"), cfg.secret("r2.cf_api_token"),
                            cfg.secret("r2.temp_parent_access_key_id"), store.bucket, prefix, ttl,
                            cfg.require("r2.endpoint"))
-    return Deps(**{
-        "db": db, "fleet": fl, "runner": runner, "executor": eval_executor(cfg, fl), "issue_creds": issue,
-        "private": private_store(cfg), "comp_rules": comp_rules, "price_at": cached_price(),
-        "work_dir": cfg.path_of("state.work_dir"),
-        "max_concurrent": runner.capacity,          # runs at once: the agent accounts' room (machines: vast.max_gpus)
-        "eval_gpu_name": cfg.get("machines.eval_gpu_name", "RTX 4090"), "eval_gpus": int(cfg.get("machines.eval_gpus", 8)),
-        "eval_idle_minutes": int(cfg.get("machines.eval_idle_minutes", 20)), "burn": owner_burn(cfg),
-        "eval_image": cfg.get("machines.image"), **parts})
+    return Orchestrator(Deps(
+        db=db, chain=Chain(cfg.get("chain.network", "finney")), github=gh, fleet=fl, runner=runner,
+        executor=eval_executor(cfg, fl), public=public_store(cfg), private=private_store(cfg),
+        owner_keypair=check_published(cfg, rules, owner), comp_rules=comp_rules, price_at=cached_price(),
+        scan_prs=lambda: scan(gh, comp_rules), issue_creds=issue, work_dir=cfg.path_of("state.work_dir"),
+        max_concurrent=runner.capacity,             # runs at once: the agent accounts' room (machines: vast.max_gpus)
+        eval_gpu_name=cfg.get("machines.eval_gpu_name", "RTX 4090"), eval_gpus=int(cfg.get("machines.eval_gpus", 8)),
+        eval_idle_minutes=int(cfg.get("machines.eval_idle_minutes", 20)), burn=owner_burn(cfg),
+        eval_image=cfg.get("machines.image")))
 
 
 def owner_burn(cfg) -> float:
@@ -137,23 +145,6 @@ def owner_burn(cfg) -> float:
     if not 0 <= burn <= 1:
         raise SystemExit(f"owner.burn must be between 0 and 1, got {burn}")
     return burn
-
-
-def build(cfg: Config):
-    """Wire the production dependencies from the configuration."""
-    from ..chain.subtensor import Chain  # noqa: PLC0415
-    from ..common.sign import load_keypair  # noqa: PLC0415
-    from ..intake.github import GitHub, scan  # noqa: PLC0415
-    from .db import DB  # noqa: PLC0415
-    from .service import Orchestrator  # noqa: PLC0415
-
-    rules = registry.latest_rules()
-    comp_rules = competition_rules(cfg.path_of("competition.local_path"), rules)
-    gh = GitHub(rules["competition"]["repo"], cfg.secret("competition.github_token"))
-    owner = load_keypair(cfg.require("owner.wallet"), cfg.require("owner.hotkey"), cfg.get("owner.path"))
-    return Orchestrator(deps(cfg, DB(cfg.path_of("state.db")), rules, comp_rules,
-                             chain=Chain(cfg.get("chain.network", "finney")), github=gh, public=public_store(cfg),
-                             owner_keypair=check_published(cfg, rules, owner), scan_prs=lambda: scan(gh, comp_rules)))
 
 
 def load_dotenv(path=".env"):
@@ -328,7 +319,6 @@ def main(argv=None):
     cfg = Config.load(a.config)
     if a.cmd == "run":
         cmd_run(cfg, a)
-        return 0 if all(r["ok"] for r in results) else 1
     elif a.cmd == "status":
         cmd_status(cfg, a)
     elif a.cmd == "refresh-agents":

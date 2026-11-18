@@ -447,7 +447,7 @@ def test_full_flow(tmp_path, capsys):
 def test_accounts_and_fees(tmp_path):
     """Deposits of any size, at any time, accumulate in the account of the coldkey that sent them, each in USD at the
     price of its own block. An entry is reviewed only when the account of the coldkey owning the hotkey covers a whole
-    run (hours x GPUs x the GPU-hour price); nothing is charged before the run. The run is charged each full hour and settled when
+    run (hours x GPUs x the GPU-hour price); without a review fee in the rules nothing is charged before the run. The run is charged each full hour and settled when
     it ends (here: an early finish after 2.5 h, which also frees the GPU at once)."""
     orch, chain, clock, pub = make(tmp_path)
     gh = orch.d.github
@@ -634,7 +634,7 @@ def test_disqualified_champion_hands_back_the_title(tmp_path):
 
 
 def test_review_lock_and_carrier(tmp_path):
-    """A rejected review spends the entry and costs nothing. An approved one is locked at that commit and charged;
+    """A rejected review spends the entry and, without a review fee in the rules, costs nothing. An approved one is locked at that commit and charged;
     the PR is only the carrier: a rebase keeps the approval, pushes after the lock never change the entry."""
     orch, chain, clock, pub = make(tmp_path)
     gh = orch.d.github
@@ -1189,6 +1189,9 @@ def test_the_review_fee_is_kept_when_review_refuses_and_is_part_of_a_run(tmp_pat
     orch.intake()
     assert orch.db.sub(sid_a)["status"] == "REJECTED" and orch.db.charged(sid_a) == {-2: 20 * pricing.MUSD}
     assert json.loads(pub.get(layout.submission(sid_a, "submission.json")))["fee"]["charged_usd"] == 20   # kept for good
+    from axonry.miner.board import detail
+    reader = miner.PublicReader(store=pub)
+    assert "charged 20.00" in detail(reader, reader.get(layout.STATUS) or {}, None, sid_a, color=False)
     s = orch.db.sub(sid_b)
     assert s["status"] == "QUEUED"                       # B paid the fee and its account (one run) still covers the run
     assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == RUN_USD - 20

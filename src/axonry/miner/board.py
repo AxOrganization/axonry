@@ -38,7 +38,8 @@ WHY = {     # reason code -> short label
     "NO_PR": "no PR yet", "UNCOMMITTED": "not committed", "PARTICIPATED": "hotkey used",
     "INSUFFICIENT_FUNDS": "insufficient funds", "COPY": "copy",
     "HOTKEY_UNKNOWN": "hotkey unknown", "BAD_PR": "bad PR", "BAD_ENTRY": "bad entry.json",
-    "BASE_NOT_ALLOWED": "wrong base", "BAD_PARENT": "bad parent", "REVIEW_CHANGES": "review: rejected",
+    "BASE_NOT_ALLOWED": "wrong base", "HOTKEY_MOVED": "hotkey changed owner", "REVEAL_EXPIRED": "revealed too late",
+    "BAD_PARENT": "bad parent", "REVIEW_CHANGES": "review: rejected",
     "CONFLICT": "conflict"}
 
 
@@ -263,10 +264,12 @@ def detail(reader, status, line, key, color=None) -> str:
     if any(facts):
         kv("pr", " · ".join(f for f in facts if f))
     fee = sub.get("fee") or {}
-    if fee:
+    if fee.get("gpus"):                         # locked: the run's terms
         agent = f" + agent up to {fee['max_agent_usd']} USD" if fee.get("max_agent_usd") else ""
         kv("fee", f"{fee['gpus']} GPU x {fee['usd_per_gpu_hour']} USD/GPU-hour{agent} · held {fee['max_usd']:.2f} · "
                   f"charged {fee.get('charged_usd', 0):.2f}")
+    elif fee:                                   # refused before its run: what it was charged (the review fee)
+        kv("fee", f"charged {fee.get('charged_usd', 0):.2f}")
     run = (m or {}).get("run")
     if run and run.get("sid") == sid:
         head(f"RUN (live, sampled {_ts(run.get('sampled_at'))} UTC)")

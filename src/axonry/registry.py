@@ -160,6 +160,9 @@ def validate(root=ROOT):
             errs.append(f"{at}: run needs gpus, gpu_model, hours")
         if not (isinstance(run.get("max_agent_usd"), (int, float)) and run["max_agent_usd"] > 0):
             errs.append(f"{at}: run.max_agent_usd not set")
+        for name, v in (("reveal_hours", r.doc.get("reveal_hours")), ("fee.review_usd", r["fee"].get("review_usd"))):
+            if v is not None and not (isinstance(v, (int, float)) and v > 0):
+                errs.append(f"{at}: {name} must be a positive number")
         if not str(r["fee"].get("treasury", "")).startswith("5"):
             errs.append(f"{at}: fee.treasury not set")
         if not r["review"].get("reviewers"):
