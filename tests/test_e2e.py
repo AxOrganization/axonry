@@ -1364,6 +1364,12 @@ def admitted(orch, n):
     return sids
 
 
+def built_on(orch, sid, name):
+    """A candidate whose admission built its model on that evaluation machine."""
+    orch.db.update(sid, record_patch={"built_on": [orch._machine_id(name)]})
+    orch.d.executor.built.add((name, sid))
+
+
 def test_a_long_evaluation_queue_takes_a_second_machine_until_it_is_short_again(tmp_path):
     from axonry.pool.machine import EVAL
     orch, chain, clock, pub = make(tmp_path)
@@ -1372,6 +1378,8 @@ def test_a_long_evaluation_queue_takes_a_second_machine_until_it_is_short_again(
     ex, fleet = orch.d.executor, orch.d.fleet
     orch.eval_machine()                                  # 3 waiting > 2: both evaluation machines
     assert fleet.get(EVAL) and fleet.get("eval-2")
+    for sid, name in ((s1, "eval-2"), (s2, EVAL), (s3, "eval-2")):   # where admission built each
+        built_on(orch, sid, name)
     orch.evaluate()                                      # one model per machine: the base and the first candidate
     assert ex.evaluated == [f"base:{BASE}", s1] and {j["machine"] for j in orch._eval_jobs().values()} == {EVAL, "eval-2"}
     orch.evaluate()                                      # both finished; the next two start side by side
@@ -1388,13 +1396,15 @@ def test_an_evaluation_whose_machine_is_gone_starts_again_on_another(tmp_path):
     orch.d.eval_machines, orch.d.eval_scale_up = 2, 0
     s1, = admitted(orch, 1)
     orch.eval_machine()
-    orch.evaluate()                                      # the base on the first machine, the candidate on the second
+    built_on(orch, s1, "eval-2")
+    orch.evaluate()                                      # the base on the first machine, the candidate where it was built
     assert orch._eval_jobs()[s1]["machine"] == "eval-2"
     orch.d.fleet.release("eval-2", "vanished")
     for job in [j for j in orch.d.executor.jobs if j.startswith("eval-2/")]:
         orch.d.executor.jobs.pop(job)                    # its job is gone with it
-    orch.evaluate()                                      # dropped; the first machine (done with the base) takes it
+    orch.evaluate()                                      # dropped; built again on the first machine, evaluated there
     assert orch._eval_jobs()[s1]["machine"] == EVAL
+    assert orch.db.sub(s1)["record"]["built_on"] == [orch._machine_id(EVAL)]
 
 
 def test_after_a_review_asks_for_changes_only_deletions_are_reviewed_again(tmp_path):
@@ -1666,18 +1676,16 @@ def test_a_block_read_incomplete_is_read_again_later(tmp_path):
     assert orch.db.get("cursor") >= 101 and orch.db.sub("0000000101-0001") is not None   # read again: nothing lost
 
 
-def test_a_candidate_evaluated_on_another_machine_is_built_there_first(tmp_path):
+def test_a_candidate_is_evaluated_only_on_the_machine_its_model_was_built_on(tmp_path):
     from axonry.pool.machine import EVAL
     orch, chain, clock, pub = make(tmp_path)
     orch.d.eval_machines, orch.d.eval_scale_up = 2, 0
     s1, s2 = admitted(orch, 2)
     orch.eval_machine()
-    ex, rules = orch.d.executor, orch.rules_for(s1)
-    for s in (s1, s2):
-        orch.db.update(s, record_patch={"built_on": [orch._machine_id(EVAL)]})
-    assert orch._model_on(EVAL, orch.db.sub(s1), rules) and (EVAL, s1) in ex.built
-    assert orch._model_on("eval-2", orch.db.sub(s1), rules) and ("eval-2", s1) in ex.built     # built there
-    orch.db.update(s2, record_patch={"model_digest": "md-other"})       # what admission built is not what comes out
-    assert not orch._model_on("eval-2", orch.db.sub(s2), rules)         # never evaluated as another model
-    assert not orch._model_on("eval-2", orch.db.sub(s2), rules)         # not the next time either
-    assert orch.db.sub(s2)["status"] == "ADMITTED"                      # ours: nothing counted against it
+    built_on(orch, s1, EVAL)
+    built_on(orch, s2, EVAL)
+    orch.evaluate()                                      # the base on eval; eval-2 holds neither model: it waits
+    assert set(orch._eval_jobs()) == {f"base:{BASE}"} and orch._eval_load("eval-2") == 0
+    orch.eval_machine()                                  # eval holds both waiting models: it stays
+    assert orch.d.fleet.get(EVAL)
+    assert min(orch._eval_ready(), key=orch._eval_load) == "eval-2"   # the next admission goes to the shorter queue

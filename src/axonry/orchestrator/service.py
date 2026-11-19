@@ -680,7 +680,7 @@ class Orchestrator:
             if f.advance(name) != "ready":
                 continue
             idle_key = f"eval_idle_since:{name}"
-            if i < want or name in busy:
+            if i < want or name in busy or self._eval_load(name):   # never while models only it holds wait
                 self.db.set(idle_key, None)
             elif i > 0:
                 f.release(name, "evaluation queue short")
@@ -731,8 +731,9 @@ class Orchestrator:
             ready = self._eval_ready()
             if not ready:
                 continue                       # eval_machine is renting or setting one up
+            on = min(ready, key=self._eval_load)   # it will be evaluated there: the machine with the shortest queue
             try:                               # a CPU job: beside an evaluation on that machine
-                adm = self.d.executor.admit(ready[0], sid, build_dir,
+                adm = self.d.executor.admit(on, sid, build_dir,
                                             registry.load_base(rec["base"], self.d.registry_root))
             except Exception as e:
                 self._failed(s, "admission", e)
@@ -746,7 +747,7 @@ class Orchestrator:
                 self._reject(sid, "REJECTED_RULES", "; ".join(adm["violations"])[:2000])
                 continue
             self.db.update(sid, "ADMITTED", record_patch={
-                "model_digest": adm["model_digest"], "built_on": [self._machine_id(ready[0])], "timeline": {**rec["timeline"], "admitted": self.now()}})
+                "model_digest": adm["model_digest"], "built_on": [self._machine_id(on)], "timeline": {**rec["timeline"], "admitted": self.now()}})
             self._recovered(s)
 
     @staticmethod
@@ -849,10 +850,16 @@ class Orchestrator:
             for model_id, benches in todo:
                 if model_id in jobs or not idle:
                     continue
-                on = idle.pop(0)
-                if model_id == s["sid"] and not self._model_on(on, s, rules):
-                    idle.insert(0, on)
-                    continue
+                if model_id == s["sid"]:
+                    here = [n for n in idle if self._machine_id(n) in self._holders(s)]
+                    if not here and idle and not self._held(s) and self._rebuild(idle[0], s, rules):
+                        here = idle[:1]          # the machine holding it is gone: built again on this one
+                    if not here:
+                        continue
+                    on = here[0]
+                    idle.remove(on)
+                else:
+                    on = idle.pop(0)
                 try:
                     job = self.d.executor.start(on, model_id, registry.load_base(rules["base"], self.d.registry_root),
                                                 benches, self._salt(rules))
@@ -864,25 +871,37 @@ class Orchestrator:
                 self.db.set("eval_jobs", jobs)
                 log.info("evaluating %s on %s", model_id, on)
 
-    def _model_on(self, on, s, rules) -> bool:
-        """A candidate's model on an evaluation machine: admission built it on one; another builds it again from the
-        same spec, which must give the same model (digest). A failure here is ours: logged, tried again next tick."""
-        sid, built = s["sid"], s["record"].get("built_on") or [self._machine_id(EVAL)]   # before: admitted on eval
+    def _holders(self, s) -> list:
+        """The machines (instances) holding a candidate's admitted model: the one admission built it on. A model built
+        again elsewhere is not bit-identical (seen: another digest), so a candidate is evaluated only there."""
+        return s["record"].get("built_on") or [self._machine_id(EVAL)]     # before built_on: admitted on eval
+
+    def _held(self, s) -> bool:
+        """Whether a machine of the fleet still holds the candidate's model."""
+        alive = {self._machine_id(n) for n in eval_names(self.d.eval_machines)} - {None}
+        return bool(alive & set(self._holders(s)))
+
+    def _rebuild(self, on, s, rules) -> bool:
+        """The only machine holding a candidate's model is gone: admission builds it again on another (the same spec;
+        the build may differ in its last bits, so the new model and digest are the ones evaluated). Ours if it fails."""
+        sid = s["sid"]
         try:
-            here = self._machine_id(on)
-            if here in built:
-                return True
             adm = self.d.executor.admit(on, sid, Path(self.d.work_dir) / sid / "build",
                                         registry.load_base(rules["base"], self.d.registry_root))
-            if not adm.get("passed") or adm.get("model_digest") != s["record"].get("model_digest"):
-                raise RuntimeError(f"rebuilt model {adm.get('model_digest')} != admitted "
-                                   f"{s['record'].get('model_digest')}")
-            self.db.update(sid, record_patch={"built_on": built + [here]})
-            log.info("built %s on %s", sid, on)
-            return True
+            if not adm.get("passed"):
+                raise RuntimeError("; ".join(adm.get("violations") or [])[:300])
         except Exception as e:
-            log.warning("model of %s on %s: %s (tried again next tick)", sid, on, str(e)[:300])
+            log.warning("rebuilding %s on %s: %s (tried again next tick)", sid, on, str(e)[:300])
             return False
+        log.warning("%s: its model's machine is gone; built again on %s (digest %s, was %s)", sid, on,
+                    adm["model_digest"], s["record"].get("model_digest"))
+        self.db.update(sid, record_patch={"model_digest": adm["model_digest"], "built_on": [self._machine_id(on)]})
+        return True
+
+    def _eval_load(self, name) -> int:
+        """Candidates waiting to be evaluated on that machine."""
+        mid = self._machine_id(name)
+        return sum(mid in self._holders(s) for s in self.db.subs(status=("ADMITTED",)))
 
     def _machine_id(self, name):
         """The machine behind an evaluation machine's name (a name is rented again; an instance is not)."""
@@ -914,8 +933,7 @@ class Orchestrator:
             outs = self.d.executor.result(j["machine"], j["job"], model_id, benches, self._salt(rules))
         except Exception as e:
             self._eval_drop(model_id)
-            built = s["record"].get("built_on") or [self._machine_id(EVAL)]
-            if model_id == s["sid"] and self._machine_id(j["machine"]) not in built:   # its model was never there
+            if model_id == s["sid"] and self._machine_id(j["machine"]) not in self._holders(s):   # never there
                 log.warning("evaluation of %s on %s: %s (ours: not counted)", model_id, j["machine"], str(e)[:200])
                 return None
             return self._eval_failed(s, model_id, e)
