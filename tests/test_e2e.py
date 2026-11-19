@@ -537,7 +537,7 @@ def test_one_registration_one_entry(tmp_path):
     open_rules(orch, 101)
     (s,) = orch.db.subs()
     assert s["sid"] == "0000000101-0001" and s["status"] == "WAITING" and s["reason_code"] == "NO_PR"
-    assert orch.db.get("prs")["1"]["reason_code"] == "UNCOMMITTED" and "neither the committed" in orch.db.get("prs")["1"]["reason"]
+    assert orch.db.get("prs")["1"]["reason_code"] == "UNCOMMITTED" and "neither the entry's content" in orch.db.get("prs")["1"]["reason"]
     gh.push(1, "a1", v1)                                # the PR now carries the committed content
     orch.intake()
     run_until_quiet(orch, clock)
@@ -618,7 +618,7 @@ def test_a_content_belongs_to_its_earliest_commitment(tmp_path):
     assert (sb["status"], sb["reason_code"]) == ("REJECTED", "COPY") and "0000000101-0001" in sb["reason"]
     w = orch.db.get("prs")
     assert w["1"]["reason_code"] == "PARTICIPATED"
-    assert w["2"]["reason_code"] == "UNCOMMITTED" and "neither the committed" in w["2"]["reason"]
+    assert w["2"]["reason_code"] == "UNCOMMITTED" and "neither the entry's content" in w["2"]["reason"]
     assert w["3"]["reason_code"] == "UNCOMMITTED" and "777" in w["3"]["reason"]
     assert orch.db.of_hotkey(HOTKEYS["A"])["reason_code"] == "NO_PR"
     assert not any(orch.db.accounts()[COLDKEYS[n]]["charged_usd"] for n in "AB")
@@ -1427,3 +1427,97 @@ def test_content_that_breaks_the_rules_waits_until_deleting_fixes_it(tmp_path):
     gh.push(n, "a-fixed", blobs_for("A"))
     orch.intake()
     assert orch.db.sub("0000000101-0001")["status"] == "REVIEW"
+
+
+def refused_entry(tmp_path, **rules_patch):
+    """A's entry, its content refused by review: (orch, chain, clock, pr number, the refused content)."""
+    orch, chain, clock, pub = make(tmp_path)
+    if rules_patch:
+        orch.d.registry_root = registry_copy(tmp_path, **rules_patch)
+    gh = orch.d.github
+    gh.approve_all = False
+    full = blobs_for("A") | {"METHOD.md": b"method of A\nscores on the benchmarks\nmore of A\n"}
+    n = pay(orch, chain, "A", 101, 1, blobs=full)
+    chain.head = 101
+    open_rules(orch, 101)
+    gh.verdicts[(n, content_digest_of_blobs(full))] = "changes"
+    orch.intake()
+    assert orch.db.sub("0000000101-0001")["reason_code"] == "REVIEW_CHANGES"
+    return orch, chain, clock, n, full
+
+
+def test_a_refused_content_stays_refused_on_any_pull_request(tmp_path):
+    orch, chain, clock, n, full = refused_entry(tmp_path)
+    gh = orch.d.github
+    gh.prs[n]["state"] = "closed"
+    gh.add_pr(n + 1, HOTKEYS["A"], "a-again", full)        # the same content again, on a new PR: no second review
+    orch.intake()
+    s = orch.db.sub("0000000101-0001")
+    assert (s["status"], s["reason_code"]) == ("WAITING", "REVIEW_CHANGES") and s["pr_number"] == n + 1
+
+
+def test_the_content_only_shrinks_and_a_fix_is_due_in_time(tmp_path):
+    orch, chain, clock, n, full = refused_entry(tmp_path, reveal_hours=24)
+    gh, sid = orch.d.github, "0000000101-0001"
+    reduced = full | {"METHOD.md": b"method of A\nmore of A\n"}
+    gh.push(n, "a-reduced", reduced)
+    orch.intake()
+    assert orch.db.sub(sid)["status"] == "REVIEW"
+    gh.push(n, "a-full-again", full)                     # an earlier, larger version never carries it again
+    orch.intake()
+    assert orch.db.sub(sid)["reason_code"] == "NO_PR"
+    gh.push(n, "a-reduced-2", reduced)
+    orch.intake()
+    gh.verdicts[(n, content_digest_of_blobs(reduced))] = "changes"
+    orch.intake()
+    assert orch.db.sub(sid)["reason_code"] == "REVIEW_CHANGES"
+    clock.t += 25 * 3600                                 # nothing fixed it within reveal_hours: the entry ends
+    orch.intake()
+    s = orch.db.sub(sid)
+    assert (s["status"], s["reason_code"]) == ("REJECTED", "REVIEW_CHANGES") and "nothing fixed it" in s["reason"]
+
+
+def test_a_reduction_counts_only_when_a_fix_is_due(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    gh.approve_all = False
+    full = blobs_for("A") | {"METHOD.md": b"method of A\nmore of A\n"}
+    n = pay(orch, chain, "A", 101, 1, blobs=full)
+    chain.head = 101
+    open_rules(orch, 101)
+    gh.push(n, "a-reduced", full | {"METHOD.md": b"method of A\n"})
+    orch.intake()
+    assert orch.db.sub("0000000101-0001")["reason_code"] == "NO_PR"      # nothing asked for a fix
+
+
+def test_an_entry_carried_before_reductions_keeps_its_first_content_for_review(tmp_path):
+    orch, chain, clock, n, full = refused_entry(tmp_path)
+    sid = "0000000101-0001"
+    rec = orch.db.sub(sid)["record"]
+    orch.db.c.execute("UPDATE submissions SET record=? WHERE sid=?",          # as recorded before reductions existed
+                      (json.dumps({k: v for k, v in rec.items() if k not in ("revealed", "content")}), sid))
+    first = orch.db.sub(sid)["head_sha"]
+    orch.d.github.push(n, "a-reduced", full | {"METHOD.md": b"method of A\nmore of A\n"})
+    orch.intake()
+    s = orch.db.sub(sid)
+    assert s["status"] == "REVIEW" and s["record"]["revealed"]["commit"] == first
+    orch.publish_status(every=0)
+    item = json.loads(orch.d.public.get(layout.STATUS))["review"][0]
+    assert item["revealed"]["commit"] == first and item["commit"] == "a-reduced"
+
+
+def test_fixing_has_one_window_from_the_first_problem(tmp_path):
+    orch, chain, clock, n, full = refused_entry(tmp_path, reveal_hours=24)
+    gh, sid = orch.d.github, "0000000101-0001"
+    clock.t += 20 * 3600
+    reduced = full | {"METHOD.md": b"method of A\nmore of A\n"}
+    gh.push(n, "a-reduced", reduced)
+    orch.intake()
+    clock.t += 3 * 3600 + 1800                           # past the window while the reduction waits for review
+    orch.intake()
+    assert orch.db.sub(sid)["status"] == "REVIEW"        # the review's wait is never the miner's
+    gh.verdicts[(n, content_digest_of_blobs(reduced))] = "changes"
+    clock.t += 3600
+    orch.intake()                                        # refused again after the window: no second one
+    s = orch.db.sub(sid)
+    assert (s["status"], s["reason_code"]) == ("REJECTED", "REVIEW_CHANGES")
