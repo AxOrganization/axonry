@@ -93,6 +93,15 @@ def ask_model(ws: Path, command: str, timeout=1800) -> dict:
     return v
 
 
+FIX_MARK = "axonry-fix: "      # in a review body: whether deletions may fix a refused content (orchestrator reads it)
+
+
+def fixable(body: str | None) -> bool:
+    """A review asking for changes allows a fix by deletion unless it says it does not (a reviewer's own words, or an
+    older review, leave it open)."""
+    return f"{FIX_MARK}no" not in (body or "")
+
+
 def review_body(v: dict, item: dict) -> tuple[str, str]:
     """-> (GitHub event, public body). Approved only when all three checks pass."""
     ok = all(v[k]["ok"] for k in CHECKS)
@@ -104,8 +113,15 @@ def review_body(v: dict, item: dict) -> tuple[str, str]:
         if k == "original" and not v[k]["ok"] and v[k].get("copies"):
             why += f" (copies `{v[k]['copies']}`)"
         lines.append(f"| {k.capitalize()} | {'Pass' if v[k]['ok'] else '**Fail**'} | {cell(why)} |")
+    fix = ok or (v.get("fixable") is True and v["original"]["ok"])      # a copy is never fixed by deleting
+    if not ok:
+        lines += ["", "**Fix by deletion: possible.** Delete what is named above (files, words or punctuation; keep the "
+                      "idea) and push to this pull request, within the time the entry's status gives; the rest is "
+                      "reviewed again." if fix else
+                      "**Fix by deletion: not possible.** The entry ends here."]
     lines += ["", f"<sub>Content `{item['content_digest'][:16]}` at commit `{item['commit'][:12]}`. "
-                  "Checks: substantive, conduct and original, as in the review policy of axonry.</sub>"]
+                  "Checks: substantive, conduct and original, as in the review policy of axonry.</sub>",
+              f"<!-- {FIX_MARK}{'yes' if fix else 'no'} -->"]
     return ("APPROVE" if ok else "REQUEST_CHANGES"), "\n".join(lines)[:60000]
 
 

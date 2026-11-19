@@ -47,6 +47,7 @@ from ..common.store import ImmutableObjectError
 from ..common.ids import make_sid
 from ..evaluation import staging
 from ..evaluation.executor import JobFailed
+from ..review.auto import fixable as review_fixable
 from ..intake import binding
 from ..pool import NoMachine
 from ..pool.machine import eval_names, is_eval, keypair
@@ -379,6 +380,10 @@ class Orchestrator:
                                                     rules["review"]["reviewers"]))
         if verdict == "changes":
             summary = (body or "changes requested").strip().split("\n\n")[0]   # the verdict; details stay on the PR
+            if not review_fixable(body):          # no deletion can fix it (e.g. a copy): the entry ends, its PR closes
+                self._reject(sid, "REVIEW_CHANGES", f"{summary[:600]} (full review on PR #{pr.number}; not fixable by "
+                             "deletion)")
+                return pr.number
             if self._content(s) not in refused:
                 self.db.update(sid, record_patch={"refused": {**refused, self._content(s): summary[:600]}})
                 s = self.db.sub(sid)

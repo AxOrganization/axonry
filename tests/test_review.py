@@ -129,3 +129,17 @@ def test_an_unreadable_status_does_not_stop_the_reviewer(tmp_path):
         def get(self, key):
             raise ConnectionError("Connection broken: IncompleteRead")
     auto.run(Down(), None, {"review": {"reviewers": ["r"]}}, tmp_path, once=True)    # no exception
+
+
+def test_the_review_says_whether_deleting_can_fix_it():
+    ok = {"ok": True, "reason": "fine"}
+    bad = {"ok": False, "reason": "lists benchmark scores"}
+    base = {"substantive": ok, "conduct": bad, "original": {**ok, "copies": None}, "message": "Delete lines 90-102."}
+    _, body = auto.review_body({**base, "fixable": True}, ITEM)
+    assert "Fix by deletion: possible" in body and auto.fixable(body)
+    _, body = auto.review_body({**base, "fixable": False}, ITEM)
+    assert "not possible" in body and not auto.fixable(body)
+    copy = {**base, "conduct": ok, "original": {"ok": False, "reason": "same method", "copies": "100-1-pr3"}}
+    _, body = auto.review_body({**copy, "fixable": True}, ITEM)       # a copy is never fixable, whatever the model said
+    assert not auto.fixable(body)
+    assert auto.fixable("an older review, no mark")

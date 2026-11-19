@@ -101,7 +101,7 @@ class FakeGitHub:
 
     def __init__(self):
         self.commits, self.prs, self.tags, self.merged, self.comments = {}, {}, {}, [], []
-        self.approve_all, self.verdicts = True, {}      # (PR, content digest) -> "approved" | "changes"
+        self.approve_all, self.verdicts, self.notes = True, {}, {}   # (PR, digest) -> "approved" | "changes"; body
 
     def add_pr(self, number, hotkey, commit, blobs):
         self.commits[commit] = blobs
@@ -125,7 +125,7 @@ class FakeGitHub:
 
     def review_state(self, number, digest, directory, reviewers):
         if (number, digest) in self.verdicts:          # reviews live on a PR, like GitHub's
-            return self.verdicts[(number, digest)], "reviewer note"
+            return self.verdicts[(number, digest)], self.notes.get((number, digest), "reviewer note")
         return ("approved", None) if self.approve_all else (None, None)
 
     def lock_tag(self, sid, commit):
@@ -1549,3 +1549,20 @@ def test_entries_refused_before_fixing_existed_get_their_window_once(tmp_path):
     orch.db.update(sid, "REJECTED")
     orch.bootstrap()                                     # once only
     assert orch.db.sub(sid)["status"] == "REJECTED"
+
+
+def test_a_refusal_no_deletion_can_fix_ends_the_entry_and_closes_its_pr(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    gh.approve_all = False
+    n = pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    key = (n, content_digest_of_blobs(blobs_for("A")))
+    gh.verdicts[key] = "changes"
+    gh.notes[key] = "### axonry review: changes requested\n\nA copy of an earlier method.\n\n<!-- axonry-fix: no -->"
+    orch.intake()
+    orch.settle_prs()
+    s = orch.db.sub("0000000101-0001")
+    assert (s["status"], s["reason_code"]) == ("REJECTED", "REVIEW_CHANGES") and "not fixable" in s["reason"]
+    assert gh.prs[n]["state"] == "closed"

@@ -122,10 +122,11 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
    carried by then is void (`REJECTED REVEAL_EXPIRED`), so a commitment cannot keep an unseen priority and be
    revealed only once a later, public entry shows that it matches.
 5. **The pull request only carries the content.** Rebasing it, or closing it and opening another with the same
-   content, changes nothing. The content can only shrink: when a review asks for changes (or the content checks
-   fail), delete what it names (files, words, punctuation; never part of a word) without changing the idea, and push
-   within the rules' `reveal_hours` of the first such verdict; the rest is checked and reviewed again, keeping your
-   priority and the one review fee. A content once refused stays refused, and anything added or rewritten is not
+   content, changes nothing. The content can only shrink: when the content checks fail, or a review asks for changes
+   and says deleting can fix it, delete what it names (files, words, punctuation; never part of a word) without
+   changing the idea, and push within the rules' `reveal_hours` of the first such verdict; the rest is checked and
+   reviewed again, keeping your priority and the one review fee. A copy, no originality or bad faith (an attack, an
+   attempt to deceive the review) cannot be fixed: the entry ends and its pull request is closed. A content once refused stays refused, and anything added or rewritten is not
    your entry (a second commitment of the hotkey is ignored).
 6. **Follow your submission.**
    ```

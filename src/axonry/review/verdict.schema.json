@@ -6,7 +6,8 @@
     "substantive",
     "conduct",
     "original",
-    "message"
+    "message",
+    "fixable"
   ],
   "properties": {
     "read": {
@@ -45,6 +46,10 @@
     },
     "message": {
       "type": "string"
+    },
+    "fixable": {
+      "type": "boolean",
+      "description": "when a check fails: true only if deleting parts of the submission (files, words, punctuation), keeping its idea, would make every check pass; false otherwise (e.g. no idea of its own, a copy). When all pass: true"
     }
   },
   "$defs": {
