@@ -9,6 +9,10 @@ from .extrinsics import parse_extrinsic
 ZERO_ACCOUNT = "5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM"   # default of SubtensorModule.Owner
 
 
+class BlockUnreadable(Exception):
+    """A node returned a block incomplete (e.g. right after it reconnected): read it again later."""
+
+
 class Chain:
     def __init__(self, network="finney", subtensor=None):
         if subtensor is None:
@@ -65,11 +69,18 @@ class Chain:
         return self.sub.query(bt.storage.Commitments.CommitmentOf, [netuid, hotkey]) is not None
 
     def items_in_block(self, block, treasury, netuid) -> list:
+        """Raises BlockUnreadable when the node returns the block incomplete (no timestamp: its extrinsics cannot be
+        trusted either); the block is read again later."""
+        return self._items_in_block(block, treasury, netuid)
+
+    def _items_in_block(self, block, treasury, netuid) -> list:
         """The commitments and deposits of one block, in extrinsic order."""
         import bittensor as bt  # noqa: PLC0415
 
         node = self._at(block)
         info = node.block_info(block)
+        if info is None or info.timestamp is None:     # every block carries its timestamp: this read is incomplete
+            raise BlockUnreadable(f"block {block}: the node returned it incomplete")
         ts = int(info.timestamp.timestamp())
         status = {}
         for e in node.query(bt.storage.System.Events, block=block):

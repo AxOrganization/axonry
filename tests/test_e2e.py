@@ -1637,3 +1637,22 @@ def test_an_agent_may_build_on_the_champion_instead(tmp_path):
     orch._materialize_chain(se, chain_dir)
     assert json.loads((chain_dir / "edit.json").read_text())["parent"] == "champion/edit.json"
     assert (chain_dir / "champion" / "edit.json").exists() and not (chain_dir / "parent").exists()
+
+
+def test_a_block_read_incomplete_is_read_again_later(tmp_path):
+    from axonry.chain.subtensor import BlockUnreadable
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    real, calls = chain.items_in_block, []
+    def flaky(b, *a):
+        calls.append(b)
+        if len(calls) == 1:
+            raise BlockUnreadable(f"block {b}: the node returned it incomplete")
+        return real(b, *a)
+    chain.items_in_block = flaky
+    open_rules(orch, 101)
+    cursor = orch.db.get("cursor")
+    assert cursor < 101                               # stopped before the block it could not read
+    run_until_quiet(orch, clock, rounds=2)
+    assert orch.db.get("cursor") >= 101 and orch.db.sub("0000000101-0001") is not None   # read again: nothing lost

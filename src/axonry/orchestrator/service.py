@@ -41,6 +41,7 @@ from .. import judge, pricing, registry
 from ..agent import brief, supervisor
 from ..agent.base import RunHandle
 from ..chain.extrinsics import Deposit
+from ..chain.subtensor import BlockUnreadable
 from ..common import layout
 from ..common.canon import pretty
 from ..common.store import ImmutableObjectError
@@ -180,7 +181,12 @@ class Orchestrator:
             except registry.RegistryError:
                 self.db.set("cursor", b)
                 continue
-            for x in self.d.chain.items_in_block(b, r["fee"]["treasury"], r["netuid"]):
+            try:
+                items = self.d.chain.items_in_block(b, r["fee"]["treasury"], r["netuid"])
+            except BlockUnreadable as e:     # read again next tick; the cursor stays before it
+                log.info("intake: %s (read again next tick)", e)
+                break
+            for x in items:
                 if isinstance(x, Deposit):
                     if x.asset in r["fee"]["assets"]:
                         self.db.add_deposit(x)
