@@ -827,7 +827,19 @@ def test_a_vanished_machine_runs_again_at_no_cost(tmp_path):
     assert orch.db.charged(sa) == {1: HOUR}
     orch.d.fleet.lost.add(sa)
     clock.t += 60
-    orch.schedule()                                     # noticed, refunded, and on a new machine at once
+    orch.schedule()                                     # one reading: vast's status flickers, nothing happens yet
+    assert orch.db.sub(sa)["status"] == "RUNNING" and orch.d.fleet.released == []
+    orch.d.fleet.lost.discard(sa)
+    clock.t += 60
+    orch.schedule()                                     # back: forgotten
+    orch.d.fleet.lost.add(sa)
+    clock.t += 60
+    orch.schedule()
+    clock.t += 9 * 60
+    orch.schedule()                                     # 9 min gone: still waited for
+    assert orch.d.fleet.released == []
+    clock.t += 60
+    orch.schedule()                                     # 10 min gone: lost, refunded, and on a new machine at once
     s = orch.db.sub(sa)
     assert orch.d.runner.kicked.count(sa) == 2 and orch.d.fleet.released == [sa]
     assert s["status"] == "RUNNING" and s["record"]["timeline"]["kickoff"] == clock.t and orch.db.charged(sa) == {}

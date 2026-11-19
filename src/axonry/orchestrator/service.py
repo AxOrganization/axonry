@@ -57,7 +57,8 @@ from .db import DB
 
 log = logging.getLogger("axonry")
 REVIEW_FEE, REVIEW_FEE_BACK = -2, -3      # charge numbers (db.charge)
-SLOW_STEP_S = 5                           # a tick step taking longer is logged
+SLOW_STEP_S = 5
+VANISH_GRACE_S = 10 * 60      # a machine vast reports gone this long (not one reading: its status flickers) is lost                           # a tick step taking longer is logged
 
 
 def _utc(ts) -> str:
@@ -458,8 +459,19 @@ class Orchestrator:
             s = live.get(m["name"])
             if not is_eval(m["name"]) and s is None:
                 self.d.fleet.release(m["name"])
-            elif s and s["status"] == "RUNNING" and gone.get(m["name"]) is True:
-                self._run_lost(s, "failed: its machine vanished")     # its host is not rented again
+            elif s and s["status"] == "RUNNING" and gone.get(m["name"]) is not None:
+                key = f"vanished_since:{m['name']}"
+                if gone[m["name"]] is not True:          # back (or never gone): a flicker
+                    if self.db.get(key):
+                        log.info("%s: its machine is back", m["name"])
+                        self.db.set(key, None)
+                elif not self.db.get(key):
+                    self.db.set(key, self.now())
+                    log.info("%s: its machine looks gone (lost if still so in %d min)", m["name"],
+                             VANISH_GRACE_S // 60)
+                elif self.now() - self.db.get(key) >= VANISH_GRACE_S:
+                    self.db.set(key, None)
+                    self._run_lost(s, "failed: its machine vanished")     # its host is not rented again
         held = sum(1 for m in self.d.fleet.active() if not is_eval(m["name"]))
         renting = True          # machines are rented in priority order: once one cannot be, none after it is
         for s in sorted(self.db.subs(status=("QUEUED",)), key=self.priority):
