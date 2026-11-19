@@ -1089,7 +1089,7 @@ class Orchestrator:
                                     != layout.rules_version(rules.sha256)):
             publisher.publish_index(self.d.public, rules, self.d.registry_root)    # a new rules version took effect
 
-    def publish_status(self, every=60):
+    def publish_status(self, every=50):    # under the 60 s tick, so that every tick publishes
         """status.json: everything in priority order - the review queue (reviewers take it top-down), the run queue,
         runs in progress and evaluations; submissions waiting (and why) and those stopped before a run; PRs that carry
         no submission (and why); every account (deposits, charges, balance per asset); every registered miner with its
