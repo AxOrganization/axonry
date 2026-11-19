@@ -50,14 +50,14 @@ def fleet(cfg, db, rules):
     def bundle():   # built once per process, from this checkout and the pinned competition repo
         if "path" not in memo:
             memo["path"] = setup_bundle(root, cfg.path_of("competition.local_path"), [registry.load_base(rules["base"])],
-                                        benches, cfg.path_of("state.work_dir") / "setup.tgz")
+                                        benches, cfg.path_of("state.work_dir") / "setup.tar")
         return memo["path"]
 
     def bundle_url(path):   # a vast.ai machine downloads the bundle from the private bucket (a presigned URL)
         priv = private_store(cfg)
         if getattr(priv, "s3", None) is None:
             return None
-        key = f"setup/{sha256_file(path)}.tgz"
+        key = f"setup/{sha256_file(path)}.tar"
         if priv.last_modified(key) is None:
             priv.put_file(key, path)
         return priv.s3.generate_presigned_url("get_object", Params={"Bucket": priv.bucket, "Key": key}, ExpiresIn=6 * 3600)

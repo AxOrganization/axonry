@@ -29,7 +29,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .machine import HERE, ROOT, Jump, Machine, MachineError, give_to_agent, is_eval, probe, scp, ssh
+from .machine import HERE, ROOT, Jump, Machine, MachineError, give_to_agent, is_eval, probe, rsync, scp, ssh
 
 log = logging.getLogger("axonry.owned")
 OWNED = "owned:"
@@ -53,11 +53,11 @@ class OwnedPool:
                  proxy_command=None, setup_minutes=180, clock=time.time, remote=None):
         """hosts: [{"name", "address", "port" (ssh, default 22), "role": "run" | "eval", "china": bool}]. bundle, items: () -> path of the setup
         bundle, of the benchmark items (built when an evaluation host first needs them). setup_minutes: a first init (Docker, a ~25 GB image) can take long; it continues on the host when a
-        machine row gives up. remote: (ssh, scp) for tests."""
+        machine row gives up. remote: (ssh, scp, rsync) for tests."""
         self.hosts = {h["name"]: h for h in hosts}
         self.db, self.image, self.key, self.bundle, self.items = db, image, str(Path(ssh_key).expanduser()), bundle, items
         self.dir, self.proxy, self.setup_s, self.clock = Path(state_dir), proxy_command, setup_minutes * 60, clock
-        self.ssh, self.scp = remote or (ssh, scp)
+        self.ssh, self.scp, self.rsync = remote or (ssh, scp, rsync)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.version = _sha12(HERE / "host.sh")
         self._pushed, self._gpus = {}, {}
@@ -86,32 +86,44 @@ class OwnedPool:
 
     def _push(self, name) -> str:
         """host.sh, the container entrypoint, our key for the containers' root, the setup bundle (on the host as
-        setup-<sha>.tgz) and, to an evaluation host, the benchmark items; once per process and bundle. -> the bundle's
+        setup-<sha>.tar) and, to an evaluation host, the benchmark items; once per process and bundle. -> the bundle's
         sha."""
         bundle = Path(self.bundle())
         sha = _sha12(bundle)
-        remote = f"{HOST_DIR}/setup-{sha}.tgz"
+        remote = f"{HOST_DIR}/setup-{sha}.tar"
         if self._pushed.get(name) != sha:
             h = self._host(name)
             keys = self.dir / "authorized_keys"
             keys.write_text(Path(self.key + ".pub").read_text())
-            self.ssh(h, self.key, f"mkdir -p {HOST_DIR}/init && find {HOST_DIR} -maxdepth 1 -name 'setup-*.tgz' "
-                                  f"! -name setup-{sha}.tgz -delete", timeout=60)
+            self.ssh(h, self.key, f"mkdir -p {HOST_DIR}/init", timeout=60)
             self.scp(h, self.key, [HERE / "host.sh"], f"{HOST_DIR}/host.sh")
             self.scp(h, self.key, [HERE / "container_init.sh", keys], f"{HOST_DIR}/init/")
-            self._upload(h, bundle, remote)
+            self._upload(h, bundle, remote, basis=f"{HOST_DIR}/setup-*.tar")
+            self.ssh(h, self.key, f"find {HOST_DIR} -maxdepth 1 -name 'setup-*' ! -name setup-{sha}.tar -delete",
+                     timeout=60)
             if self.hosts[name]["role"] == "eval":
                 self._upload(h, Path(self.items()), f"{HOST_DIR}/items.tar")
             self.ssh(h, self.key, f"chmod 755 {HOST_DIR}/host.sh {HOST_DIR}/init/container_init.sh", timeout=60)
             self._pushed[name] = sha
         return sha
 
-    def _upload(self, h, path: Path, remote: str):
-        """scp unless the host already holds this exact file (a link to a far host can take many minutes)."""
+    def _upload(self, h, path: Path, remote: str, basis=None):
+        """Unless the host already holds this exact file (a link to a far host can take many minutes): scp, or with
+        basis (a glob of earlier versions on the host) an rsync delta against the newest of them."""
         want = hashlib.sha256(path.read_bytes()).hexdigest()
-        have = self.ssh(h, self.key, f"sha256sum {shlex.quote(remote)} 2>/dev/null | cut -c1-64; true", timeout=120)
-        if (have or "").strip() != want:
+        held = lambda: (self.ssh(h, self.key, f"sha256sum {shlex.quote(remote)} 2>/dev/null | cut -c1-64; true",  # noqa: E731
+                                 timeout=120) or "").strip()
+        if held() == want:
+            return
+        if not basis:
             self.scp(h, self.key, [path], remote)
+            return
+        q = shlex.quote(remote)
+        self.ssh(h, self.key, f"[ -f {q} ] || {{ old=$(ls -t {basis} 2>/dev/null | head -1); "
+                              f"[ -z \"$old\" ] || cp \"$old\" {q}; }}; true", timeout=120)
+        self.rsync(h, self.key, path, remote)
+        if held() != want:
+            raise MachineError(f"{h.name}: {remote} does not match after the transfer")
 
     def _step(self, name, step, args) -> bool:
         """A detached host step: True once done; raises SetupFailed with its log when it failed (the next call
@@ -184,7 +196,7 @@ class OwnedPool:
             if self.clock() - row["created_at"] > self.setup_s:
                 raise SetupFailed(f"not ready within {self.setup_s // 60} min")
             sha = self._push(host)
-            bundle = f"{HOST_DIR}/setup-{sha}.tgz"
+            bundle = f"{HOST_DIR}/setup-{sha}.tar"
             if not self._step(host, f"init-{self.version}", f"init {shlex.quote(self.image)} {self._china(host)}"):
                 return "booting"
             if slot == EVAL_SLOT:

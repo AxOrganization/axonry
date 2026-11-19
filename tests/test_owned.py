@@ -64,14 +64,17 @@ class FakeHost:
         if len(srcs) == 1:
             self.held[dst] = hashlib.sha256(srcs[0].read_bytes()).hexdigest()
 
+    def rsync(self, m, key, src, dst, timeout=0):
+        self.scp(m, key, [Path(src)], dst)
+
 
 def pool(tmp_path, hosts, fake, clock):
     (tmp_path / "k.pub").write_text("ssh-ed25519 AAAA orchestrator")
-    (tmp_path / "setup.tgz").write_bytes(b"bundle")
+    (tmp_path / "setup.tar").write_bytes(b"bundle")
     db = DB(tmp_path / "db.sqlite")
     (tmp_path / "items.tar").write_bytes(b"items")
-    p = OwnedPool(hosts, db, image="img@sha256:1", ssh_key=str(tmp_path / "k"), bundle=lambda: tmp_path / "setup.tgz",
-                  items=lambda: tmp_path / "items.tar", state_dir=tmp_path / "m", clock=lambda: clock[0], remote=(fake.ssh, fake.scp))
+    p = OwnedPool(hosts, db, image="img@sha256:1", ssh_key=str(tmp_path / "k"), bundle=lambda: tmp_path / "setup.tar",
+                  items=lambda: tmp_path / "items.tar", state_dir=tmp_path / "m", clock=lambda: clock[0], remote=(fake.ssh, fake.scp, fake.rsync))
     return p, db
 
 
@@ -313,3 +316,19 @@ def test_the_items_are_published_beside_their_definitions(tmp_path):
     assert benchdata.publish(pub, pack, docs) == ["benchmarks/gsm8k500@1/items.jsonl"]
     assert pub.get(layout.benchmark_items("gsm8k500", 1)) == b'{"id": "g1"}\n'
     assert not layout.is_mutable(layout.benchmark_items("gsm8k500", 1))       # write-once
+
+
+def test_a_new_bundle_goes_to_a_host_as_a_delta_against_the_one_it_holds(tmp_path):
+    clock, fake = [1000.0], FakeHost()
+    host = [{"name": "rig", "address": "203.0.113.5", "port": 9000, "role": "run", "china": True}]
+    sent, cmds = [], []
+    ssh0 = fake.ssh
+    fake.ssh = lambda m, key, command, **kw: (cmds.append(command), ssh0(m, key, command, **kw))[1]
+    fake.rsync = lambda m, key, src, dst, timeout=0: (sent.append(dst), fake.scp(m, key, [Path(src)], dst))
+    p, _ = pool(tmp_path, host, fake, clock)
+    assert p.rent("s1", "RTX 4090", 4) and p.advance("s1") == "booting"
+    (dst,) = sent
+    assert re.fullmatch(r"/srv/axonry/host/setup-[0-9a-f]{12}\.tar", dst)
+    seed = next(c for c in cmds if "ls -t /srv/axonry/host/setup-*.tar" in c)   # the newest held bundle as its basis
+    clean = next(c for c in cmds if "-delete" in c)                            # older bundles go only afterwards
+    assert cmds.index(seed) < cmds.index(clean) and f"! -name {dst.rsplit('/', 1)[1]}" in clean

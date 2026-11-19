@@ -30,9 +30,9 @@ wait_sshd() {   # the container's entrypoint (container_init.sh) installed sshd 
 setup_in() {    # setup.sh in a container, from the bundle (pip through the mirror in China)
   local c=$1 bundle=$2 china=$3 env=()
   [ "$china" = 1 ] && env=(-e PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple)
-  docker cp "$bundle" "$c:/root/axonry-setup.tgz"
+  docker cp "$bundle" "$c:/root/axonry-setup.tar"
   docker exec "${env[@]}" "$c" bash -c 'rm -rf /root/axonry-setup && mkdir /root/axonry-setup &&
-    tar xzf /root/axonry-setup.tgz -C /root/axonry-setup && /root/axonry-setup/setup.sh "$(nvidia-smi -L | wc -l)"'
+    tar xf /root/axonry-setup.tar -C /root/axonry-setup && /root/axonry-setup/setup.sh "$(nvidia-smi -L | wc -l)"'
 }
 
 install_docker() {

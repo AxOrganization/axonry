@@ -161,6 +161,21 @@ def scp(m: Machine, key, srcs, dst: str, timeout=1800, attempts=3):
     raise MachineError(f"{m.name}: scp failed: {r.stderr.strip()[-500:]}")
 
 
+def rsync(m: Machine, key, src, dst: str, timeout=3600, attempts=3):
+    """Copy one local file to dst on the machine as a delta against what dst already holds (rsync over ssh)."""
+    import shlex  # noqa: PLC0415
+    for i in range(attempts):
+        try:
+            r = subprocess.run(["rsync", "-z", "--partial", "-e", shlex.join(["ssh", *m.ssh_args(key)]), str(src),
+                                f"{m.ssh}:{dst}"], capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            raise MachineError(f"{m.name}: rsync timed out") from e
+        if r.returncode == 0:
+            return
+        time.sleep(5 * (i + 1))
+    raise MachineError(f"{m.name}: rsync failed: {r.stderr.strip()[-500:]}")
+
+
 def keypair(comment: str):
     """-> (private key, public key line): ed25519, no passphrase, written only to a temporary directory."""
     import tempfile  # noqa: PLC0415
@@ -194,7 +209,8 @@ def setup_bundle(project: Path, competition: Path, base_docs: list, bench_docs: 
     """What setup.sh installs: our package (as the working tree has it, without NOT_BUNDLED), the competition repo at its checked-out
     commit (the orchestrator refuses to start unless that is the rules' pin), the rules' base definitions, its
     benchmarks (key, task, frozen manifest: what an owned evaluation host checks its items against) and nltk's
-    tokenizer data."""
+    tokenizer data. A plain tar (its big members are already compressed or rarely change): a new bundle reaches a far host
+    as an rsync delta against the one it holds."""
     from ..evaluation import benchdata  # noqa: PLC0415
     from ..registry import base_dirname  # noqa: PLC0415
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -206,7 +222,7 @@ def setup_bundle(project: Path, competition: Path, base_docs: list, bench_docs: 
         ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, 0, "", ""
         return ti
 
-    with gzip.GzipFile(dest, "wb", mtime=0) as gz, tarfile.open(fileobj=gz, mode="w") as tf:
+    with tarfile.open(dest, "w") as tf:
         def add(name, data, mode=0o644):
             ti = tarfile.TarInfo(name)
             ti.size, ti.mode = len(data), mode

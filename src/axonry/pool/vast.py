@@ -199,15 +199,15 @@ class Fleet:
                 if self.bundle_url:   # the machine downloads it in the background: a far link holds up nothing
                     sha = hashlib.sha256(bundle.read_bytes()).hexdigest()
                     fetch = (f"python3 -c {shlex.quote(FETCH)} {shlex.quote(self.bundle_url(bundle))} "
-                             f"/root/axonry-setup.tgz {sha} && ")
+                             f"/root/axonry-setup.tar {sha} && ")
                 else:
-                    self.scp(m, self.key, bundle, "/root/axonry-setup.tgz")
+                    self.scp(m, self.key, bundle, "/root/axonry-setup.tar")
                 items = ""
                 if is_eval(purpose):   # the benchmark items: an evaluation machine's only (the toolkit has none)
                     self.scp(m, self.key, Path(self.items()), "/root/axonry-items.tar")
                     items = " /root/axonry-items.tar"
                 setup = (f"rm -rf /root/axonry-setup {ROOT}/FAILED && {fetch}mkdir /root/axonry-setup && "
-                         "tar xzf /root/axonry-setup.tgz -C /root/axonry-setup && "
+                         "tar xf /root/axonry-setup.tar -C /root/axonry-setup && "
                          f"AXONRY_GPU_CHECK=1 /root/axonry-setup/setup.sh {row['gpus']}{items} "
                          f"|| {{ mkdir -p {ROOT}; touch {ROOT}/FAILED; }}")
                 self.ssh(m, self.key, f"(setsid nohup sh -c {shlex.quote(setup)} > /root/axonry-setup.log 2>&1 "

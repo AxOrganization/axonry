@@ -61,7 +61,7 @@ def fleet(tmp_path, clock):
     (tmp_path / "k.pub").write_text("ssh-ed25519 AAAA orchestrator")
     api, remote = FakeAPI(), FakeRemote()
     f = Fleet(api, DB(tmp_path / "db.sqlite"), image="img", disk_gb=100, ssh_key=str(tmp_path / "k"),
-              bundle=lambda: tmp_path / "setup.tgz", state_dir=tmp_path / "m", setup_minutes=45,
+              bundle=lambda: tmp_path / "setup.tar", state_dir=tmp_path / "m", setup_minutes=45,
               clock=lambda: clock[0], remote=(remote.ssh, remote.scp), items=lambda: tmp_path / "items.tar")
     return f, api, remote
 
@@ -77,7 +77,7 @@ def test_a_machine_is_rented_set_up_and_released(tmp_path):
     remote.drop = 1                                   # a dropped connection: retried, not a failure
     assert f.advance("qwen35-0.8b-think") == "booting" and api.destroyed == []
     assert f.advance("qwen35-0.8b-think") == "setting_up"
-    assert any("setup.sh 8" in c for c in remote.commands) and "scp /root/axonry-setup.tgz" in remote.commands
+    assert any("setup.sh 8" in c for c in remote.commands) and "scp /root/axonry-setup.tar" in remote.commands
     assert not any("axonry-items" in c for c in remote.commands)          # a run's machine never gets the items
     assert f.advance("qwen35-0.8b-think") == "setting_up"
     remote.ready = True
@@ -250,7 +250,7 @@ def test_a_machine_downloads_the_bundle_itself_and_checks_it(tmp_path):
 
     from axonry.pool.vast import FETCH
     clock = [1000.0]
-    (tmp_path / "setup.tgz").write_bytes(b"bundle")
+    (tmp_path / "setup.tar").write_bytes(b"bundle")
     f, api, remote = fleet(tmp_path, clock)
     f.bundle_url = lambda path: "https://r2.example/setup.tgz?sig=1"
     f.rent("qwen35-0.8b-think", "RTX 4090", 8)
@@ -260,7 +260,7 @@ def test_a_machine_downloads_the_bundle_itself_and_checks_it(tmp_path):
     sha = hashlib.sha256(b"bundle").hexdigest()
     assert not any(c.startswith("scp ") for c in remote.commands)           # nothing sent from here
     assert any("r2.example" in c and sha in c and "setup.sh 8" in c for c in remote.commands)
-    url, dest = (tmp_path / "setup.tgz").as_uri(), str(tmp_path / "got.tgz")
+    url, dest = (tmp_path / "setup.tar").as_uri(), str(tmp_path / "got.tgz")
     assert subprocess.run([sys.executable, "-c", FETCH, url, dest, sha]).returncode == 0
     assert subprocess.run([sys.executable, "-c", FETCH, url, dest, "0" * 64], capture_output=True).returncode != 0
 
