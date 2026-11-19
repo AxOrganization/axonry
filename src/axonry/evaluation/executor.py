@@ -87,14 +87,15 @@ class SshExecutor:
         """The job's exit code, "" while it runs."""
         return self._ssh(on, f"cat {shlex.quote(job)}/exit 2>/dev/null || true", timeout=60).strip()
 
-    def _check(self, on, job: str, code: str):
+    def _check(self, on, job: str, code: str, ok=("0",)):
         err = lambda: self._ssh(on, f"tail -c 800 {shlex.quote(job)}/err")  # noqa: E731
         if code == "3":             # eval_remote.ITEMS_MISMATCH: our frozen data, never the model's fault
             raise ExecError(f"job {job}: {err()}")
-        if code != "0":
+        if code not in ok:
             raise JobFailed(f"job {job} exited {code}: {err()}")
 
-    def _job(self, on, model_id: str, cmd: list, gpus: bool, timeout: int, poll: int = 20, setup: str = "true") -> str:
+    def _job(self, on, model_id: str, cmd: list, gpus: bool, timeout: int, poll: int = 20, setup: str = "true",
+             ok=("0",)) -> str:
         """A short job, waited for here: -> its stdout."""
         job = self._start(on, model_id, cmd, gpus, setup)
         end = time.time() + timeout
@@ -105,7 +106,7 @@ class SshExecutor:
             except ExecError:
                 continue          # the host is unreachable for a moment; the job keeps running
             if code:
-                self._check(on, job, code)
+                self._check(on, job, code, ok)
                 return self.fetch_file(on, f"{job}/out").decode()
         raise JobFailed(f"job {job} did not finish within {timeout}s")
 
@@ -125,11 +126,12 @@ class SshExecutor:
         cmd, ln = self._command(sid, base_dirname(base_doc), [   # CPU only: runs alongside an evaluation
             "python3", "-m", "axonry.evaluation.admit_remote", "--spec-dir", "edit",
             "--base-dir", "base", "--base-id", base_id, "--build-dir", "model"])
-        out = self._job(on, sid, cmd, gpus=False, timeout=3600, setup=ln)
-        i = out.find("{")
-        if i < 0:
-            raise ExecError(f"admission produced no result: {out[-500:]}")
-        return json.loads(out[i:])
+        out = self._job(on, sid, cmd, gpus=False, timeout=3600, setup=ln,
+                        ok=("0", "1"))     # 1: a verdict that does not pass (rejected under the rules), not a crash
+        try:
+            return json.loads(out[out.index("{"):])
+        except ValueError:      # it crashed (exit 1) or printed no verdict: the candidate's own job failed
+            raise JobFailed(f"admission produced no result: {out[-500:]}") from None
 
     @staticmethod
     def _spec(bench_docs):
