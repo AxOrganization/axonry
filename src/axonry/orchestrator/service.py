@@ -56,6 +56,7 @@ from .db import DB
 
 log = logging.getLogger("axonry")
 REVIEW_FEE, REVIEW_FEE_BACK = -2, -3      # charge numbers (db.charge)
+SLOW_STEP_S = 5                           # a tick step taking longer is logged
 
 
 def _utc(ts) -> str:
@@ -1216,10 +1217,13 @@ class Orchestrator:
     def tick(self, role="all"):
         names = self.ROLES["main"] + self.ROLES["eval"] if role == "all" else self.ROLES[role]
         for name in names:
+            t = time.monotonic()
             try:
                 getattr(self, name)()
             except Exception:
                 log.exception("tick %s", name)
+            if (took := time.monotonic() - t) > SLOW_STEP_S:    # what holds the loop up shows in the log
+                log.info("tick %s took %.0f s", name, took)
 
     def keep_agents(self):
         self.d.runner.keep_alive()
