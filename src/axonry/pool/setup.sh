@@ -14,6 +14,18 @@ rm -f $R/READY $R/FAILED
 trap 'echo "setup failed at line $LINENO" >&2; mkdir -p $R; touch $R/FAILED' ERR
 
 test "$(nvidia-smi -L | wc -l)" -eq "$1"
+# a rented machine (AXONRY_GPU_CHECK=1: its GPUs are idle): every GPU computes, or setup fails here and the machine is
+# given up and never rented again (an owned host's GPUs may be busy with its other runs: not checked there)
+if [ "${AXONRY_GPU_CHECK:-0}" = 1 ]; then
+  timeout -k 10 180 python3 - "$1" <<'PY'
+import sys, torch
+n = int(sys.argv[1])
+assert torch.cuda.device_count() == n, f"{torch.cuda.device_count()} CUDA devices, {n} expected"
+for i in range(n):
+    x = torch.ones(1024, 1024, device=f"cuda:{i}")
+    assert float((x @ x).sum()) == 1024.0 ** 3, f"GPU {i} computes wrong"
+PY
+fi
 
 # pinned: graders and loaders must not change under a rules version (verified together, 2026-11-16)
 pip install -q --no-cache-dir math-verify==0.9.0 lm-eval==0.4.13 langdetect==1.0.9 immutabledict==4.3.1 nltk==3.10.4 \

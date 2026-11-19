@@ -203,7 +203,8 @@ class Fleet:
                     self.scp(m, self.key, bundle, "/root/axonry-setup.tgz")
                 setup = (f"rm -rf /root/axonry-setup {ROOT}/FAILED && {fetch}mkdir /root/axonry-setup && "
                          "tar xzf /root/axonry-setup.tgz -C /root/axonry-setup && "
-                         f"/root/axonry-setup/setup.sh {row['gpus']} || {{ mkdir -p {ROOT}; touch {ROOT}/FAILED; }}")
+                         f"AXONRY_GPU_CHECK=1 /root/axonry-setup/setup.sh {row['gpus']} "
+                         f"|| {{ mkdir -p {ROOT}; touch {ROOT}/FAILED; }}")
                 self.ssh(m, self.key, f"(setsid nohup sh -c {shlex.quote(setup)} > /root/axonry-setup.log 2>&1 "
                                       "< /dev/null &)", timeout=300)
                 self.db.set_machine(purpose, state="setting_up")

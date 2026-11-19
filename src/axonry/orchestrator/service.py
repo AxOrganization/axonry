@@ -571,7 +571,7 @@ class Orchestrator:
             r = self.db.run(sid)
             task, h, st = r["task"], RunHandle(**r["handle"]), r["sup_state"] or {}
             has_upload = self.d.private.last_modified(layout.staging_prefix(sid) + "manifest.json") is not None
-            st["live"] = self._sample(sid)
+            st["live"] = self._sample(sid, st.get("live"))
             try:
                 outcome = supervisor.step(self.now(), task, h, self.d.runner, st, has_upload, st["live"].get("done"))
             except Exception as e:  # agent backend / network hiccup: retried next tick, forced stop at the deadline
@@ -1124,15 +1124,19 @@ class Orchestrator:
         return {"sid": champ["sid"], "hotkey": champ["hotkey"], "pr": pr.get("number"),
                 "title": pr.get("title")}
 
-    def _sample(self, sid) -> dict:
-        """The run's machine now: GPU use and the agent's one-line status (secrets of the run removed)."""
+    def _sample(self, sid, last=None) -> dict:
+        """The run's machine now: GPU use and the agent's one-line status (secrets of the run removed). What a sample
+        cannot read (a slow or sick host) keeps the last reading."""
+        last = last or {}
         try:
             live = self.d.fleet.sample(sid)
+            if live["gpus"] is None:
+                live["gpus"] = last.get("gpus")
             if live["note"]:
                 live["note"] = redact.redact(live["note"], redact.secrets_in_bundle(self._bundle_path(sid)))
-        except Exception as e:   # the run goes on; the status shows the last sample's age
+        except Exception as e:   # the run goes on
             log.warning("sample %s: %s", sid, str(e).splitlines()[0][:200])
-            live = {}
+            live = {k: last[k] for k in ("gpus", "note", "done") if k in last}
         return {**live, "at": self.now()}
 
     def _run_view(self, s, r, at):

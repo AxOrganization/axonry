@@ -129,18 +129,18 @@ def _number(field: str) -> int | None:
 
 def sample(m: Machine, key) -> dict:
     """A run's machine at a glance: each GPU's use and the agent's one-line status (the first line of its PROGRESS.md,
-    at most 20 words; None before it writes one), both public; done: the agent ran axonry-done. The GPUs are read
+    at most 20 words; None before it writes one), both public (gpus None when unread); done: the agent ran axonry-done. The GPUs are read
     apart: a sick GPU can hang nvidia-smi, and must never hide the rest (the done flag above all)."""
     out = ssh(m, key, "test -f /workspace/work/DONE && echo done; echo ---;"
               " head -c 2000 /workspace/work/PROGRESS.md 2>/dev/null || true", timeout=20, attempts=1)
     flag, _, progress = out.partition("---\n")
-    try:
-        gpus_out = ssh(m, key, "timeout -k 2 10 nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total "
-                       "--format=csv,noheader,nounits", timeout=20, attempts=1)
+    try:   # some hosts take ~25 s to answer nvidia-smi
+        gpus_out = ssh(m, key, "timeout -k 2 55 nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total "
+                       "--format=csv,noheader,nounits", timeout=60, attempts=1)
+        gpus = [dict(zip(("util_pct", "mem_used_mib", "mem_total_mib"), map(_number, line.split(","))))
+                for line in gpus_out.splitlines() if line.strip()]
     except MachineError:
-        gpus_out = ""
-    gpus = [dict(zip(("util_pct", "mem_used_mib", "mem_total_mib"), map(_number, line.split(","))))
-            for line in gpus_out.splitlines() if line.strip()]
+        gpus = None   # unread: the caller keeps the last reading
     line = next((x for x in progress.splitlines() if x.strip()), "")
     line = re.sub(r"^(status:)\s*", "", line.strip().lstrip("#*->` ").strip(), flags=re.I)
     return {"gpus": gpus, "note": " ".join(line.split()[:20])[:200] or None, "done": flag.strip() == "done"}
