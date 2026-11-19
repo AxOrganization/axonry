@@ -445,11 +445,12 @@ class Orchestrator:
         rented from being set up); a run starts when its machine is ready (setup time is ours). Runs may finish out of order; decisions
         never do (see decide). A machine whose run is over is released; a run whose machine vanished runs again."""
         live = {s["sid"]: s for s in self.db.subs(status=("QUEUED", "RUNNING"))}
+        gone = self.d.fleet.vanished_all([s["sid"] for s in live.values() if s["status"] == "RUNNING"])  # at once
         for m in self.d.fleet.active():
             s = live.get(m["name"])
             if not is_eval(m["name"]) and s is None:
                 self.d.fleet.release(m["name"])
-            elif s and s["status"] == "RUNNING" and self.d.fleet.vanished(m["name"]):
+            elif s and s["status"] == "RUNNING" and gone.get(m["name"]) is True:
                 self._run_lost(s, "its machine vanished")
         held = sum(1 for m in self.d.fleet.active() if not is_eval(m["name"]))
         renting = True          # machines are rented in priority order: once one cannot be, none after it is
@@ -575,7 +576,8 @@ class Orchestrator:
     # ------------------------------------------------------------------------------------------- supervise
     def supervise(self):
         running = self.db.subs(status=("RUNNING",))
-        samples = self.d.fleet.sample_all([s["sid"] for s in running])   # all machines at once
+        samples = self.d.fleet.sample_all([s["sid"] for s in running])   # all machines and agents at once
+        polls = self._poll_all(running)
         for s in running:
             sid = s["sid"]
             self._bill(s)
@@ -584,7 +586,8 @@ class Orchestrator:
             has_upload = self.d.private.last_modified(layout.staging_prefix(sid) + "manifest.json") is not None
             st["live"] = self._sample(sid, samples.get(sid), st.get("live"))
             try:
-                outcome = supervisor.step(self.now(), task, h, self.d.runner, st, has_upload, st["live"].get("done"))
+                outcome = supervisor.step(self.now(), task, h, self.d.runner, st, has_upload, st["live"].get("done"),
+                                          polls.get(sid))
             except Exception as e:  # agent backend / network hiccup: retried next tick, forced stop at the deadline
                 log.warning("supervise %s: %s (retrying next tick)", sid, str(e).splitlines()[0][:200])
                 if self.now() < task["run"]["deadline"]:
@@ -1134,6 +1137,19 @@ class Orchestrator:
         pr = rec.get("pr") or {}
         return {"sid": champ["sid"], "hotkey": champ["hotkey"], "pr": pr.get("number"),
                 "title": pr.get("title")}
+
+    def _poll_all(self, running) -> dict:
+        """Each running agent's status, read side by side: {sid: RunStatus, or the exception reading it raised}."""
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+        handles = {s["sid"]: RunHandle(**self.db.run(s["sid"])["handle"]) for s in running}
+
+        def one(h):
+            try:
+                return self.d.runner.poll(h)
+            except Exception as e:  # noqa: BLE001 - raised again in that run's own step
+                return e
+        with ThreadPoolExecutor(max_workers=max(1, len(handles))) as ex:
+            return dict(zip(handles, ex.map(one, handles.values())))
 
     def _sample(self, sid, live, last=None) -> dict:
         """The run's machine now (live: its sample, or the exception reading it): GPU use and the agent's one-line

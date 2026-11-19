@@ -245,10 +245,10 @@ class OwnedPool:
                "is installed)") if self.hosts[host].get("china") else "open"
         return probe(self.machine(row), self.key, net, self.ssh)
 
-    def vanished(self, purpose) -> bool:
+    def vanished(self, purpose, row=None) -> bool:
         """A ready machine whose container no longer runs (host rebooted, removed by hand); an unreachable host is
         not (yet) a vanished machine."""
-        row = self.get(purpose)
+        row = row or self.get(purpose)
         if row is None or row["state"] != "ready":
             return False
         host, slot = self._where(row)

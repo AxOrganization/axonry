@@ -285,9 +285,9 @@ class Fleet:
     def probe(self, purpose) -> dict:
         return probe(self.machine(self.get(purpose)), self.key, "open", self.ssh)
 
-    def vanished(self, purpose) -> bool:
+    def vanished(self, purpose, row=None) -> bool:
         """A ready machine whose instance vast no longer runs (host failure, outbid, deleted)."""
-        row = self.get(purpose)
+        row = row or self.get(purpose)
         if row is None or row["state"] != "ready":
             return False
         try:

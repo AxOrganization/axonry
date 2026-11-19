@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from axonry.pool.machine import MachineError
+
 from axonry.agent.arbos import ArbosError, ArbosRunner
 from axonry.agent.base import RunHandle
 from axonry.orchestrator.db import DB
@@ -370,3 +372,34 @@ def test_items_failing_their_check_release_the_machine_without_blaming_it(tmp_pa
     assert f.advance("eval") == "failed" and api.destroyed == ["i1"]
     gone = f.db.machines(states=("gone",))[-1]
     assert not gone["note"].startswith("failed")                # never rented again only for its own failures
+
+
+def test_a_failed_check_is_never_taken_for_a_vanished_machine(tmp_path):
+    from axonry.pool import Machines
+    from axonry.pool.machine import MachineError
+    db = DB(tmp_path / "db.sqlite")
+    for p in ("a", "b"):
+        db.add_machine(p, f"v-{p}", "m", "RTX 4090", 4, 1.0, 0)
+
+    class Vast:
+        def vanished(self, purpose, row):
+            if purpose == "b":
+                raise MachineError("vast.ai API unreachable")
+            return row["provider_id"] == "v-a"
+    got = Machines(db, "k", None, Vast()).vanished_all(["a", "b"])
+    assert got["a"] is True and isinstance(got["b"], MachineError)   # the service acts only on True
+
+
+def test_a_step_uses_the_status_read_beforehand():
+    from axonry.agent import supervisor
+    from axonry.agent.base import RunStatus
+
+    class Runner:
+        def poll(self, h):
+            raise AssertionError("read again")
+    task = {"run": {"deadline": 10_000, "stall_minutes": 20, "wrap_minutes": [30, 10], "max_agent_usd": None},
+            "sid": "s"}
+    st = RunStatus(True, 900.0)
+    assert supervisor.step(1000, task, None, Runner(), {}, False, False, st) == "running"
+    with pytest.raises(MachineError):                     # a status that could not be read: that run retries
+        supervisor.step(1000, task, None, Runner(), {}, False, False, MachineError("arbos down"))

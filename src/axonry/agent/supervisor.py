@@ -16,13 +16,16 @@ from . import brief
 CONTINUE_MIN_GAP = 300
 
 
-def step(now: int, task: dict, handle, runner, state: dict, has_upload: bool, done: bool = False) -> str:
-    """-> "running" | "finished" (deadline, or the agent said it is done) | "stalled" | "budget" (cost cap) | "lost"."""
+def step(now: int, task: dict, handle, runner, state: dict, has_upload: bool, done: bool = False, polled=None) -> str:
+    """-> "running" | "finished" (deadline, or the agent said it is done) | "stalled" | "budget" (cost cap) | "lost".
+    polled: the agent's status read beforehand (or the exception reading it raised); None: read it here."""
     run = task["run"]
     if now >= run["deadline"]:
         runner.stop(handle)
         return "finished"
-    st = runner.poll(handle)
+    if isinstance(polled, Exception):
+        raise polled
+    st = polled or runner.poll(handle)
     if st.error:
         state.setdefault("error_since", now)
         if now - state["error_since"] >= run["stall_minutes"] * 60:

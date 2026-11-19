@@ -49,19 +49,27 @@ class Machines:
     def hand_over(self, purpose, public_key: str, deadline: int):
         return self._of(self.get(purpose)).hand_over(purpose, public_key, deadline)
 
-    def sample_all(self, purposes) -> dict:
-        """Each machine's sample, read side by side: {purpose: its sample, or the exception reading it raised}. The
-        machines are looked up here (the DB stays in this thread); only the ssh rounds run in parallel."""
+    def _side_by_side(self, purposes, call) -> dict:
+        """call(purpose, row) for each machine at once: {purpose: its result, or the exception it raised}. The rows
+        are read here (the DB stays in this thread); only the remote rounds run in parallel."""
         from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
-        machines = {p: self.machine(row) for p in purposes if (row := self.get(p)) is not None}
+        rows = {p: row for p in purposes if (row := self.get(p)) is not None}
 
-        def one(m):
+        def one(item):
             try:
-                return sample(m, self.key)
-            except Exception as e:  # noqa: BLE001 - one machine's failure is that machine's reading only
+                return call(*item)
+            except Exception as e:  # noqa: BLE001 - one machine's failure is that machine's result only
                 return e
-        with ThreadPoolExecutor(max_workers=max(1, len(machines))) as ex:
-            return dict(zip(machines, ex.map(one, machines.values())))
+        with ThreadPoolExecutor(max_workers=max(1, len(rows))) as ex:
+            return dict(zip(rows, ex.map(one, rows.items())))
+
+    def sample_all(self, purposes) -> dict:
+        """Each machine's sample: {purpose: its sample, or the exception reading it raised}."""
+        return self._side_by_side(purposes, lambda p, row: sample(self.machine(row), self.key))
+
+    def vanished_all(self, purposes) -> dict:
+        """{purpose: whether its machine vanished, or the exception checking it raised}."""
+        return self._side_by_side(purposes, lambda p, row: self._of(row).vanished(p, row))
 
     def probe(self, purpose) -> dict:
         return self._of(self.get(purpose)).probe(purpose)
