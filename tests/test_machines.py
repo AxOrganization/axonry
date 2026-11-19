@@ -222,3 +222,25 @@ def test_offers_leave_out_hosts_vast_deverified():
     api.call = lambda *a, **k: {"offers": [{"id": 1, "verification": "deverified"}, {"id": 2, "verification": "verified"},
                                            {"id": 3, "verification": "unverified"}]}
     assert [o["id"] for o in api.offers("RTX 4090", 4, 0.95, 150, 200)] == [2, 3]
+
+
+def test_a_machine_downloads_the_bundle_itself_and_checks_it(tmp_path):
+    import hashlib
+    import subprocess
+    import sys
+
+    from axonry.pool.vast import FETCH
+    clock = [1000.0]
+    (tmp_path / "setup.tgz").write_bytes(b"bundle")
+    f, api, remote = fleet(tmp_path, clock)
+    f.bundle_url = lambda path: "https://r2.example/setup.tgz?sig=1"
+    f.rent("qwen35-0.8b-think", "RTX 4090", 8)
+    api.status["i1"] = {"actual_status": "running", "public_ipaddr": "198.51.100.4",
+                        "ports": {"22/tcp": [{"HostPort": "40022"}]}}
+    assert f.advance("qwen35-0.8b-think") == "setting_up"
+    sha = hashlib.sha256(b"bundle").hexdigest()
+    assert not any(c.startswith("scp ") for c in remote.commands)           # nothing sent from here
+    assert any("r2.example" in c and sha in c and "setup.sh 8" in c for c in remote.commands)
+    url, dest = (tmp_path / "setup.tgz").as_uri(), str(tmp_path / "got.tgz")
+    assert subprocess.run([sys.executable, "-c", FETCH, url, dest, sha]).returncode == 0
+    assert subprocess.run([sys.executable, "-c", FETCH, url, dest, "0" * 64], capture_output=True).returncode != 0

@@ -51,6 +51,15 @@ def fleet(cfg, db, rules):
                                         benches, cfg.path_of("state.work_dir") / "setup.tgz")
         return memo["path"]
 
+    def bundle_url(path):   # a vast.ai machine downloads the bundle from the private bucket (a presigned URL)
+        priv = private_store(cfg)
+        if getattr(priv, "s3", None) is None:
+            return None
+        key = f"setup/{sha256_file(path)}.tgz"
+        if priv.last_modified(key) is None:
+            priv.put_file(key, path)
+        return priv.s3.generate_presigned_url("get_object", Params={"Bucket": priv.bucket, "Key": key}, ExpiresIn=6 * 3600)
+
     def items():    # an owned evaluation host's benchmark items, built once per set of benchmarks
         return benchdata.build(cfg.path_of("competition.local_path"), benches, cfg.path_of("state.work_dir"))
     key, image, proxy = cfg.require("machines.ssh_key"), cfg.require("machines.image"), cfg.get("machines.proxy_command")
@@ -64,7 +73,7 @@ def fleet(cfg, db, rules):
                  exclude_countries=cfg.get("vast.exclude_countries", ["CN"]),
                  verified_only=bool(cfg.get("vast.verified_only", False)), min_cuda=float(cfg.get("vast.min_cuda", 0)),
                  setup_minutes=int(cfg.get("vast.setup_minutes", 45)),
-                 proxy_command=proxy) if cfg.get("vast.enabled", False) else None
+                 proxy_command=proxy, bundle_url=bundle_url) if cfg.get("vast.enabled", False) else None
     cap = cfg.get("vast.max_gpus")
     return Machines(db, str(Path(key).expanduser()), owned, vast, int(cap) if cap is not None else None)
 

@@ -13,15 +13,31 @@ Lifecycle (table machines, one row per purpose: a submission id, or "eval"):
   gone        destroyed (released, failed or vanished); a vast machine whose setup failed is not rented again
 Setup time is ours: a run's clock starts when its machine is ready.
 """
+import hashlib
 import json
 import logging
 import os
+import shlex
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from .machine import ROOT, Machine, MachineError, give_to_agent, probe, scp, ssh
+
+# on the machine: python3 -c FETCH <url> <dest> <sha256>: download, then refuse a file of another content
+FETCH = """import hashlib, sys, time, urllib.request
+url, dest, sha = sys.argv[1:4]
+for attempt in range(5):
+    try:
+        urllib.request.urlretrieve(url, dest)
+        break
+    except OSError as e:
+        print("download failed:", e, flush=True)
+        time.sleep(10)
+got = hashlib.sha256(open(dest, "rb").read()).hexdigest()
+sys.exit(0 if got == sha else f"bundle sha256 {got} != {sha}")
+"""
 
 log = logging.getLogger("axonry.vast")
 API = "https://console.vast.ai/api/v0"
@@ -99,13 +115,15 @@ class Fleet:
     def __init__(self, api: VastAPI, db, *, image: str, disk_gb: int, ssh_key: str, bundle, state_dir: Path,
                  min_reliability=0.95, min_down_mbps=200, exclude_countries=("CN",), verified_only=False,
                  min_cuda=0.0, setup_minutes=45,
-                 proxy_command=None, clock=time.time, remote=None):
-        """bundle: () -> path of the setup bundle (built once). remote: (ssh, scp) for tests."""
+                 proxy_command=None, clock=time.time, remote=None, bundle_url=None):
+        """bundle: () -> path of the setup bundle (built once). bundle_url: (path) -> a URL the machine downloads it
+        from (else it is copied over ssh, which on a slow link holds up the caller). remote: (ssh, scp) for tests."""
         self.api, self.db, self.image, self.disk_gb, self.key = api, db, image, disk_gb, os.path.expanduser(ssh_key)
         self.bundle, self.dir, self.min_rel, self.min_down = bundle, Path(state_dir), min_reliability, min_down_mbps
         self.exclude, self.verified_only, self.min_cuda = tuple(exclude_countries), verified_only, min_cuda
         self.setup_s, self.proxy, self.clock = setup_minutes * 60, proxy_command, clock
         self.ssh, self.scp = remote or (ssh, scp)
+        self.bundle_url = bundle_url
         self.dir.mkdir(parents=True, exist_ok=True)
         self._key_on_account = False
 
@@ -165,11 +183,19 @@ class Fleet:
                     return "booting"
                 m = self._reachable(purpose, [(inst["public_ipaddr"].strip(), int(port)),
                                               (inst.get("ssh_host"), inst.get("ssh_port"))])
-                self.scp(m, self.key, self.bundle(), "/root/axonry-setup.tgz")
-                self.ssh(m, self.key, "rm -rf /root/axonry-setup && mkdir /root/axonry-setup && "
-                                      "tar xzf /root/axonry-setup.tgz -C /root/axonry-setup && "
-                                      f"(setsid nohup /root/axonry-setup/setup.sh {row['gpus']} "
-                                      "> /root/axonry-setup.log 2>&1 < /dev/null &)", timeout=300)
+                bundle = Path(self.bundle())
+                fetch = ""
+                if self.bundle_url:   # the machine downloads it in the background: a far link holds up nothing
+                    sha = hashlib.sha256(bundle.read_bytes()).hexdigest()
+                    fetch = (f"python3 -c {shlex.quote(FETCH)} {shlex.quote(self.bundle_url(bundle))} "
+                             f"/root/axonry-setup.tgz {sha} && ")
+                else:
+                    self.scp(m, self.key, bundle, "/root/axonry-setup.tgz")
+                setup = (f"rm -rf /root/axonry-setup {ROOT}/FAILED && {fetch}mkdir /root/axonry-setup && "
+                         "tar xzf /root/axonry-setup.tgz -C /root/axonry-setup && "
+                         f"/root/axonry-setup/setup.sh {row['gpus']} || {{ mkdir -p {ROOT}; touch {ROOT}/FAILED; }}")
+                self.ssh(m, self.key, f"(setsid nohup sh -c {shlex.quote(setup)} > /root/axonry-setup.log 2>&1 "
+                                      "< /dev/null &)", timeout=300)
                 self.db.set_machine(purpose, state="setting_up")
                 return "setting_up"
             m = self.machine(row)
