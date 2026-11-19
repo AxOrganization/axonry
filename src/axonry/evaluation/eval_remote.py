@@ -162,8 +162,11 @@ def main(argv=None):
 
     benchmarks = json.loads(a.benchmarks)
     for b in benchmarks:
-        got = data.manifest(b["task"])["sha256"]
-        if got != b["manifest"]:
+        try:
+            got = data.manifest(b["task"])["sha256"]
+        except FileNotFoundError as e:      # the items were not supplied to this machine: ours, never the model's
+            print(f"{b['key']}: items missing: {e}", file=sys.stderr)
+            return ITEMS_MISMATCH
             print(f"{b['key']}: item set {got[:12]} != frozen {b['manifest'][:12]}", file=sys.stderr)
             return ITEMS_MISMATCH
     prof = profiles.get(a.profile)

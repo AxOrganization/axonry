@@ -26,6 +26,8 @@ for i in range(n):
     x = torch.ones(1024, 1024, device=f"cuda:{i}")
     assert float((x @ x).sum()) == 1024.0 ** 3, f"GPU {i} computes wrong"
 PY
+else   # an owned host's GPUs may be busy with its other runs: CUDA must see them all, nothing is allocated on them
+  python3 -c "import torch; n = torch.cuda.device_count(); assert n == $1, f'{n} CUDA devices, $1 expected'"
 fi
 
 # pinned: graders and loaders must not change under a rules version (verified together, 2026-11-16)
@@ -77,8 +79,11 @@ pkill -HUP -x sshd || true
 
 if [ -n "${2:-}" ]; then
   tar xf "$2" -C $R/wsp_work
-  HF_HUB_OFFLINE=1 PYTHONPATH=$R/repos/WeightSpaceProgramming WSP_WORK=$R/wsp_work python3 -m axonry.evaluation.benchdata \
-    "$B/benchmarks.json"
+  if ! HF_HUB_OFFLINE=1 PYTHONPATH=$R/repos/WeightSpaceProgramming WSP_WORK=$R/wsp_work python3 -m axonry.evaluation.benchdata \
+      "$B/benchmarks.json"; then
+    touch $R/ITEMS_FAILED       # our pack, not the machine: it is released without being held against it
+    exit 1
+  fi
 fi
 
 date +%s > $R/READY

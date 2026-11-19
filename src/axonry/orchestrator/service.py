@@ -1134,9 +1134,9 @@ class Orchestrator:
                 live["gpus"] = last.get("gpus")
             if live["note"]:
                 live["note"] = redact.redact(live["note"], redact.secrets_in_bundle(self._bundle_path(sid)))
-        except Exception as e:   # the run goes on
+        except Exception as e:   # the run goes on; the last reading stays, with its own time
             log.warning("sample %s: %s", sid, str(e).splitlines()[0][:200])
-            live = {k: last[k] for k in ("gpus", "note", "done") if k in last}
+            return {k: last[k] for k in ("gpus", "note", "done", "at") if k in last}
         return {**live, "at": self.now()}
 
     def _run_view(self, s, r, at):

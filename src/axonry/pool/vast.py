@@ -215,9 +215,15 @@ class Fleet:
                 self.db.set_machine(purpose, state="setting_up")
                 return "setting_up"
             m = self.machine(row)
-            st = self.ssh(m, self.key, f"cat {ROOT}/READY 2>/dev/null || (test -f {ROOT}/FAILED && "
+            st = self.ssh(m, self.key, f"cat {ROOT}/READY 2>/dev/null || (test -f {ROOT}/ITEMS_FAILED && echo ITEMS && "
+                                       f"tail -c 600 /root/axonry-setup.log) || (test -f {ROOT}/FAILED && "
                                        "echo FAILED && tail -c 600 /root/axonry-setup.log) || true", timeout=45,
                           attempts=1).strip()
+            if st.startswith("ITEMS"):     # our benchmark items failed their check there: not the machine's fault
+                log.warning("machine %s (instance %s): benchmark items check failed: %s", purpose,
+                            row["provider_id"], st[5:].strip()[-300:])
+                self.release(purpose, "released: the benchmark items failed their check (ours)")
+                return "failed"
             if st.startswith("FAILED"):
                 raise SetupFailed(f"setup failed: {st[6:]}")
             if st:

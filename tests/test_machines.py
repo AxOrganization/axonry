@@ -293,8 +293,8 @@ def test_an_unread_sample_keeps_the_last_reading():
     orch = SimpleNamespace(d=SimpleNamespace(fleet=SimpleNamespace(sample=sample)), now=lambda: 5.0)
     got = Orchestrator._sample(orch, "s", last)                  # nvidia-smi unread: the GPUs stay as last read
     assert got == {"gpus": last["gpus"], "note": None, "done": False, "at": 5.0}
-    got = Orchestrator._sample(orch, "s", last)                  # the machine unreachable: everything stays
-    assert got == {**last, "at": 5.0}
+    got = Orchestrator._sample(orch, "s", last)                  # the machine unreachable: the last reading stays,
+    assert got == last                                           # with its own time
 
 
 def test_an_evaluation_machine_gets_the_benchmark_items(tmp_path):
@@ -314,3 +314,37 @@ def test_the_benchmark_sources_stay_out_of_the_setup_bundle():
     from axonry.pool.machine import NOT_BUNDLED
     src = Path(__file__).resolve().parents[1] / "src"
     assert all((src / rel).is_file() for rel in NOT_BUNDLED)         # a rename must not ship them silently
+
+
+def test_an_evaluation_machine_is_rented_only_once_the_items_are_built(tmp_path):
+    from axonry.pool import Machines
+    db = DB(tmp_path / "db.sqlite")
+    rented = []
+
+    class Vast:
+        def rent(self, purpose, gpu_name, gpus):
+            rented.append(purpose)
+
+    def broken():
+        raise RuntimeError("benchmark items: the source is unreachable")
+    with pytest.raises(RuntimeError):
+        Machines(db, "k", None, Vast(), items=broken).rent("eval", "RTX 4090", 8)
+    assert rented == []                                         # no machine taken (and none blamed) for our failure
+    Machines(db, "k", None, Vast(), items=broken).rent("0000000101-0001", "RTX 4090", 4)
+    assert rented == ["0000000101-0001"]                        # a run's machine never needs the items
+
+
+def test_items_failing_their_check_release_the_machine_without_blaming_it(tmp_path):
+    clock = [1000.0]
+    f, api, remote = fleet(tmp_path, clock)
+    f.rent("eval", "RTX 4090", 8)
+    api.status["i1"] = {"actual_status": "running", "public_ipaddr": "198.51.100.4",
+                        "ports": {"22/tcp": [{"HostPort": "40022"}]}}
+    assert f.advance("eval") == "setting_up"
+    real = remote.ssh
+    remote.ssh = lambda m, key, command, **k: "ITEMS\nbench:x: items missing" if "ITEMS_FAILED" in command \
+        else real(m, key, command, **k)
+    f.ssh = remote.ssh
+    assert f.advance("eval") == "failed" and api.destroyed == ["i1"]
+    gone = f.db.machines(states=("gone",))[-1]
+    assert not gone["note"].startswith("failed")                # never rented again only for its own failures
