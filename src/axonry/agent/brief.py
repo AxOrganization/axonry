@@ -51,7 +51,9 @@ def render(task: dict) -> str:
     return f"""# Task brief — submission {task['sid']}
 
 This brief is generated from the competition rules; it is the authoritative list of what you have and what you may
-do. Your method is in `submission/METHOD.md` (written by the miner); follow it within these limits.
+do. Your method is in `submission/METHOD.md` (written by the miner); follow it within these limits. `submission/` is
+the method exactly as reviewed: work from it, the toolkit and practice data only, and never look up its pull request,
+earlier versions of it, or anything else about it or the evaluation benchmarks elsewhere.
 
 ## Goal
 Improve base model `{task['base']}` on the benchmarks by **editing its weights directly** (method guide: the
