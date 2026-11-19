@@ -1412,3 +1412,18 @@ def test_a_binary_file_is_refused_whatever_its_name(tmp_path):
     blobs = blobs_for("A") | {"data/dirs.txt": b"\x93NUMPY\x01\x00v\x00{'descr'"}
     assert "not readable text" in check_files(blobs, COMP_RULES)
     assert check_files(blobs_for("A") | {"data/words.txt": "ünïcode words\n".encode()}, COMP_RULES) is None
+
+
+def test_content_that_breaks_the_rules_waits_until_deleting_fixes_it(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    gh.approve_all = False
+    full = blobs_for("A") | {"data/dirs.txt": b"\x93NUMPY\x01\x00binary"}
+    n = pay(orch, chain, "A", 101, 1, blobs=full)
+    chain.head = 101
+    open_rules(orch, 101)
+    s = orch.db.sub("0000000101-0001")
+    assert s["status"] == "WAITING" and "not readable text" in s["reason"] and "Only deletions" in s["reason"]
+    gh.push(n, "a-fixed", blobs_for("A"))
+    orch.intake()
+    assert orch.db.sub("0000000101-0001")["status"] == "REVIEW"

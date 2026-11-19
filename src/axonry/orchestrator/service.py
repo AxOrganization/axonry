@@ -286,7 +286,8 @@ class Orchestrator:
                              content (the PR is only the carrier: it can be rebased, or closed and another opened)
           revealed in time   with the rules' reveal_hours, the first PR carrying it is opened within that time of
                              the commitment; past it with no such PR the entry is void (REJECTED REVEAL_EXPIRED)
-          valid content      entry.json and files (invalid is final: the content can only shrink, see below)
+          valid content      entry.json and files; invalid -> WAITING with the problem (the content can only
+                             shrink: deleting may fix it)
           funds              the account of the coldkey owning the hotkey covers a whole run (besides what its
                              other locked entries hold); then the review fee is charged, once (it counts towards
                              the run, or is kept if review refuses the entry)
@@ -325,7 +326,8 @@ class Orchestrator:
             return pr.number
         entry = binding.check_content(self.d.github.dir_blobs(pr.head, pr.directory), rules, self.d.comp_rules)
         if isinstance(entry, binding.Rejected):
-            self._reject(sid, entry.code, entry.detail)
+            self._set_stage(s, "WAITING", entry.code, f"{entry.detail}. Only deletions are possible: delete what "
+                            "breaks the rules and push")
             return pr.number
         why, final = self._parent_problem(entry)
         if why:
