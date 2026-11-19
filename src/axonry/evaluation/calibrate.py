@@ -15,7 +15,7 @@ from ..common.canon import write_json
 from ..benchmarks import parse
 
 
-def calibrate(executor, rules, registry_root=registry.ROOT, salts=("aa-1", "aa-2"), out: Path | None = None):
+def calibrate(executor, on, rules, registry_root=registry.ROOT, salts=("aa-1", "aa-2"), out: Path | None = None):
     base_doc = registry.load_base(rules["base"], registry_root)
     z_tie, z_win = rules["judge"]["z_tie"], rules["judge"]["z_win"]
     report = {"base": rules["base"], "salts": list(salts), "benchmarks": {}}
@@ -23,7 +23,7 @@ def calibrate(executor, rules, registry_root=registry.ROOT, salts=("aa-1", "aa-2
     benches = {k: registry.load_benchmark(k, registry_root).doc for k in keys}
     model_id = f"base:{rules['base']}"
     report["model"] = model_id
-    outs = [executor.evaluate(model_id, base_doc, list(benches.values()), s) for s in salts]
+    outs = [executor.evaluate(on, model_id, base_doc, list(benches.values()), s) for s in salts]
     for key in keys:
         bench, params = benches[key], rules.judge_params(key)
         runs = [parse(o[key]) for o in outs]

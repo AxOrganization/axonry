@@ -262,13 +262,12 @@ class FakeRunner:
 
 
 class FakeExecutor:
+    """Evaluation machines: admission at once; an evaluation job finishes on the next look at it."""
+
     def __init__(self, tmp):
-        self.tmp, self.specs, self.evaluated = tmp, {}, []
+        self.tmp, self.specs, self.evaluated, self.jobs = tmp, {}, [], {}
 
-    def ready(self):
-        return True
-
-    def admit(self, sid, spec_dir, base_doc):
+    def admit(self, on, sid, spec_dir, base_doc):
         spec = json.loads((spec_dir / "edit.json").read_text())
         spec.pop("parent", None)
         self.specs[sid] = spec
@@ -277,9 +276,14 @@ class FakeExecutor:
                     "info": {}, "model_digest": None}
         return {"passed": True, "violations": [], "info": {"tensors": 1}, "model_digest": "md-" + "".join(spec["ops"])}
 
-    def evaluate(self, model_id, base_doc, bench_docs, salt):
+    def start(self, on, model_id, base_doc, bench_docs, salt):
         self.evaluated.append(model_id)
-        return {f"{b['id']}@{b['version']}": self.run_benchmark(model_id, b) for b in bench_docs}
+        job = f"{on}/{model_id}/{len(self.evaluated)}"
+        self.jobs[job] = {f"{b['id']}@{b['version']}": self.run_benchmark(model_id, b) for b in bench_docs}
+        return job
+
+    def result(self, on, job, model_id, bench_docs, salt):
+        return self.jobs.pop(job)
 
     def run_benchmark(self, model_id, bench_doc):
         q = 0.0 if model_id.startswith("base:") else next(
@@ -562,7 +566,7 @@ def test_copy_cannot_overtake_the_original(tmp_path):
     open_rules(orch, 101)
     sa, sb = "0000000101-0001", "0000000105-0001"
     gh.verdicts[(nb, content_digest_of_blobs(copy))] = "approved"    # the copy is reviewed first
-    run_until_quiet(orch, clock, rounds=3)
+    run_until_quiet(orch, clock, rounds=4)
     assert orch.db.sub(sb)["status"] == "SCORED"                   # finished, but waits for the earlier priority
     assert orch.db.sub(sa)["status"] == "REVIEW"
     gh.verdicts[(na, content_digest_of_blobs(blobs_for("A")))] = "approved"
@@ -1327,3 +1331,47 @@ def test_index_follows_a_new_rules_version_of_the_same_base(tmp_path):
     orch.refresh_weights()
     idx = json.loads(pub.get(layout.INDEX))
     assert idx["rules"] != v1 and json.loads(pub.get(idx["rules"]))["fee"]["review_usd"] == 20
+
+
+def admitted(orch, n):
+    """n candidates ADMITTED directly (their runs and admission are other tests' business)."""
+    rules = registry.load_rules_versions(BASE, orch.d.registry_root)[-1]
+    sids = [f"00000002{i:02d}-0001" for i in range(n)]
+    for i, sid in enumerate(sids):
+        orch.db.add_submission(sid, BASE, f"hk{i}", f"ck{i}", "ADMITTED",
+                               {"rules_sha256": rules.sha256, "base": BASE, "timeline": {}}, f"d{i}", (200 + i, 1))
+        orch.d.executor.specs[sid] = next(iter(PLANS.values()))["spec"]
+    return sids
+
+
+def test_a_long_evaluation_queue_takes_a_second_machine_until_it_is_short_again(tmp_path):
+    from axonry.pool.machine import EVAL
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.eval_machines, orch.d.eval_scale_up, orch.d.eval_scale_down = 2, 2, 2
+    s1, s2, s3 = admitted(orch, 3)
+    ex, fleet = orch.d.executor, orch.d.fleet
+    orch.eval_machine()                                  # 3 waiting > 2: both evaluation machines
+    assert fleet.get(EVAL) and fleet.get("eval-2")
+    orch.evaluate()                                      # one model per machine: the base and the first candidate
+    assert ex.evaluated == [f"base:{BASE}", s1] and {j["machine"] for j in orch._eval_jobs().values()} == {EVAL, "eval-2"}
+    orch.evaluate()                                      # both finished; the next two start side by side
+    assert orch.db.sub(s1)["status"] == "SCORED" and ex.evaluated[2:] == [s2, s3]
+    orch.evaluate()
+    assert orch.db.sub(s3)["status"] == "SCORED" and not orch._eval_jobs()
+    orch.eval_machine()                                  # nothing waits: the second one goes, the first idles
+    assert "eval-2" in fleet.released and fleet.get(EVAL)
+
+
+def test_an_evaluation_whose_machine_is_gone_starts_again_on_another(tmp_path):
+    from axonry.pool.machine import EVAL
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.eval_machines, orch.d.eval_scale_up = 2, 0
+    s1, = admitted(orch, 1)
+    orch.eval_machine()
+    orch.evaluate()                                      # the base on the first machine, the candidate on the second
+    assert orch._eval_jobs()[s1]["machine"] == "eval-2"
+    orch.d.fleet.release("eval-2", "vanished")
+    for job in [j for j in orch.d.executor.jobs if j.startswith("eval-2/")]:
+        orch.d.executor.jobs.pop(job)                    # its job is gone with it
+    orch.evaluate()                                      # dropped; the first machine (done with the base) takes it
+    assert orch._eval_jobs()[s1]["machine"] == EVAL

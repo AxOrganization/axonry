@@ -163,10 +163,6 @@ def test_the_router_prefers_owned_hosts_and_waits_without_vast(tmp_path):
     assert machines.vast.released == "s2"
     with pytest.raises(NoMachine):
         Machines(db, "k", p, None).rent("s3", "RTX 4090", 4)
-    capped = Machines(db, "k", p, Vast(), vast_max_gpus=8)                  # s2 holds 4 of vast's 8
-    capped.rent("s3", "RTX 4090", 4)
-    with pytest.raises(NoMachine):                                          # at the cap: the queue waits
-        capped.rent("s4", "RTX 4090", 4)
 
 
 def test_ssh_through_a_jump_host():

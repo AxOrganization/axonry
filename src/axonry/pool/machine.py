@@ -18,7 +18,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = "/srv/axonry"          # the machine's layout (setup.sh)
-EVAL = "eval"                 # the evaluation machine's purpose; a run machine's is its submission id
+EVAL = "eval"                 # evaluation machines' purposes: eval, eval-2, ...; a run machine's is its submission id
+
+
+def eval_names(n: int) -> list:
+    """The purposes of n evaluation machines, the first one used first."""
+    return [EVAL] + [f"{EVAL}-{i}" for i in range(2, n + 1)]
+
+
+def is_eval(purpose: str) -> bool:
+    return purpose == EVAL or purpose.startswith(f"{EVAL}-")
 HERE = Path(__file__).parent
 # IFEval's sentence tokenizer (nltk punkt_tab; sha256 as nltk's data index lists it). Fetched here and shipped in the
 # setup bundle: the downloader's source is unreachable from some machines, and a grader's data must not change.

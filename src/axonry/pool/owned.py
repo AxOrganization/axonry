@@ -29,7 +29,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .machine import EVAL, HERE, ROOT, Jump, Machine, MachineError, give_to_agent, probe, scp, ssh
+from .machine import HERE, ROOT, Jump, Machine, MachineError, give_to_agent, is_eval, probe, scp, ssh
 
 log = logging.getLogger("axonry.owned")
 OWNED = "owned:"
@@ -155,7 +155,7 @@ class OwnedPool:
                 continue
             if not inv or not all(gpu_name in g for g in inv):
                 continue
-            if purpose == EVAL:
+            if is_eval(purpose):
                 if h["role"] != "eval" or (name, EVAL_SLOT) in taken or len(inv) != gpus:
                     continue
                 slot = EVAL_SLOT

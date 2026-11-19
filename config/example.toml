@@ -35,7 +35,12 @@ ssh_key = "~/.ssh/axonry_vast"  # the orchestrator's key: root on every machine 
                                 #   authorized_keys; vast.ai: added to the account itself)
 eval_gpus = 8                 # the evaluation machine's GPUs (an owned evaluation host must have exactly these)
 eval_gpu_name = "RTX 4090"    # every evaluation of a base on one GPU model: scores are compared across runs
-eval_idle_minutes = 20        # a vast.ai evaluation machine is released after this long without work
+eval_idle_minutes = 20        # the first evaluation machine is released after this long without work
+# How many machines are in use, whatever their source (owned hosts first, then vast.ai):
+max_runs = 10                 # runs at once (also bounded by the agent accounts' room)
+eval_machines = 2             # evaluation machines at most: one while there is work, ...
+eval_scale_up = 10            # ... all of them while more models than this wait for evaluation, ...
+eval_scale_down = 5           # ... until fewer than this do (the others are released once their job is done)
 # proxy_command = "nc -X 5 -x PROXY_HOST:PORT %h %p"   # only where this host reaches the internet through a proxy
 
 # Owned hosts (pool/owned.py; set up automatically on first use: Docker, the NVIDIA runtime, firewall, jump user, image).
@@ -51,7 +56,6 @@ eval_idle_minutes = 20        # a vast.ai evaluation machine is released after t
 [vast]                        # GPU machines rented on vast.ai: one per run, one for evaluation
 enabled = false
 api_key_env = "VASTAI_KEY"
-max_gpus = 24                 # all vast.ai machines together (runs and, when the owned one is busy, evaluation)
 min_cuda = 13.0               # the image is CUDA 13.0: the host driver must support it natively
 disk_gb = 150
 min_reliability = 0.95

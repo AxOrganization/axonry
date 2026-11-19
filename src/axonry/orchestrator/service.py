@@ -12,9 +12,11 @@ One registration, one entry: a hotkey's first commitment on the subnet is its su
             agent gets it + R2 creds -> RUNNING. A run whose machine vanishes runs again, nothing charged
   supervise RUNNING -> agent steps until the deadline (or an early finish), charged each full hour; export log;
             machine released; the used time settled -> COLLECTING
-  eval_machine  the evaluation machine: rented while there is admission or evaluation work, released when idle
-  collect   staging upload -> admission on the evaluation machine               -> ADMITTED | REJECTED | FAILED
-  evaluate  ADMITTED -> benchmarks (the base model first, once: the reference)     -> SCORED
+  eval_machine  the evaluation machines (eval_machines at most): one while there is admission or evaluation
+            work, all while the evaluation queue is long; released when idle or no longer needed
+  collect   staging upload -> admission on an evaluation machine                -> ADMITTED | REJECTED | FAILED
+  evaluate  ADMITTED -> benchmarks, one model per evaluation machine at a time (the base model first, once: the
+            reference)                                                           -> SCORED
   decide    SCORED in priority order vs the champion of the moment               -> PUBLISHED (+ weights, merge)
   janitor   staging uploads of finished submissions; old state snapshots
 The competition runs on one base model at a time; each base has its own line of champions (registry.py).
@@ -47,7 +49,7 @@ from ..evaluation import staging
 from ..evaluation.executor import JobFailed
 from ..intake import binding
 from ..pool import NoMachine
-from ..pool.machine import EVAL, keypair
+from ..pool.machine import eval_names, is_eval, keypair
 from ..publish import publisher, redact
 from .db import DB
 
@@ -88,10 +90,13 @@ class Deps:
     clock: object = time.time
     registry_root: Path = registry.ROOT
     work_dir: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "axonry-work")
-    max_concurrent: int = 4       # runs holding a machine at once (also bounded by the agent backend's capacity)
+    max_concurrent: int = 4       # runs holding a machine at once, from any source (also bounded by the agent backend)
     eval_gpu_name: str = "RTX 4090"
     eval_gpus: int = 8
     eval_idle_minutes: int = 20
+    eval_machines: int = 1        # evaluation machines at most, from any source
+    eval_scale_up: int = 10       # all of them while more models than this wait for evaluation ...
+    eval_scale_down: int = 5      # ... until fewer than this do; otherwise one
     burn: float = 0.0             # the owner's share of the weight burned (uid0) beside the champion's
     eval_image: str | None = None # the pinned container image results are generated in (recorded with each score)
 
@@ -377,11 +382,11 @@ class Orchestrator:
         live = {s["sid"]: s for s in self.db.subs(status=("QUEUED", "RUNNING"))}
         for m in self.d.fleet.active():
             s = live.get(m["name"])
-            if m["name"] != EVAL and s is None:
+            if not is_eval(m["name"]) and s is None:
                 self.d.fleet.release(m["name"])
             elif s and s["status"] == "RUNNING" and self.d.fleet.vanished(m["name"]):
                 self._run_lost(s, "its machine vanished")
-        held = sum(1 for m in self.d.fleet.active() if m["name"] != EVAL)
+        held = sum(1 for m in self.d.fleet.active() if not is_eval(m["name"]))
         renting = True          # machines are rented in priority order: once one cannot be, none after it is
         for s in sorted(self.db.subs(status=("QUEUED",)), key=self.priority):
             if not self._due(s):
@@ -556,31 +561,49 @@ class Orchestrator:
 
     # ------------------------------------------------------------------------------------------- evaluation machine
     def eval_machine(self):
-        """The evaluation machine is rented while admission or evaluation work waits, and released after
-        eval_idle_minutes without any."""
+        """The evaluation machines (eval, eval-2, ...: eval_machines at most, from whatever source the fleet has):
+        the first is rented while admission or evaluation work waits and released after eval_idle_minutes without
+        any; the others join while more than eval_scale_up models wait (COLLECTING or ADMITTED) and leave, once their
+        own job is done, when fewer than eval_scale_down do."""
         f = self.d.fleet
-        work = bool(self.db.subs(status=("COLLECTING", "ADMITTED")))
-        if f.get(EVAL) is None:
-            if work:
-                try:
-                    f.rent(EVAL, self.d.eval_gpu_name, self.d.eval_gpus)
-                except NoMachine as e:
-                    log.info("evaluation machine: %s", e)
-                except Exception as e:
-                    log.warning("renting the evaluation machine: %s", e)
-            return
-        if f.vanished(EVAL):
-            f.release(EVAL, "vanished")
-            return
-        if f.advance(EVAL) != "ready":
-            return
-        if work:
-            self.db.set("eval_idle_since", None)
-        elif not self.db.get("eval_idle_since"):
-            self.db.set("eval_idle_since", self.now())
-        elif self.now() - self.db.get("eval_idle_since") >= self.d.eval_idle_minutes * 60:
-            f.release(EVAL, "idle")
-            self.db.set("eval_idle_since", None)
+        waiting = len(self.db.subs(status=("COLLECTING", "ADMITTED")))
+        if waiting > self.d.eval_scale_up:
+            self.db.set("eval_scaled_up", True)
+        elif waiting < self.d.eval_scale_down:
+            self.db.set("eval_scaled_up", False)
+        names = eval_names(self.d.eval_machines)
+        want = (len(names) if self.db.get("eval_scaled_up") else 1) if waiting else 0
+        busy = {j["machine"] for j in self._eval_jobs().values()}
+        for i, name in enumerate(names):
+            if f.get(name) is None:
+                if i < want:
+                    try:
+                        f.rent(name, self.d.eval_gpu_name, self.d.eval_gpus)
+                    except NoMachine as e:
+                        log.info("evaluation machine %s: %s", name, e)
+                    except Exception as e:
+                        log.warning("renting evaluation machine %s: %s", name, e)
+                continue
+            if f.vanished(name):
+                f.release(name, "vanished")
+                continue
+            if f.advance(name) != "ready":
+                continue
+            idle_key = f"eval_idle_since:{name}"
+            if i < want or name in busy:
+                self.db.set(idle_key, None)
+            elif i > 0:
+                f.release(name, "evaluation queue short")
+            elif not self.db.get(idle_key):
+                self.db.set(idle_key, self.now())
+            elif self.now() - self.db.get(idle_key) >= self.d.eval_idle_minutes * 60:
+                f.release(name, "idle")
+                self.db.set(idle_key, None)
+
+    def _eval_ready(self) -> list:
+        """The ready evaluation machines, first one first."""
+        return [n for n in eval_names(self.d.eval_machines)
+                if (r := self.d.fleet.get(n)) is not None and r["state"] == "ready"]
 
     # ------------------------------------------------------------------------------------------- collect
     def collect(self):
@@ -612,10 +635,12 @@ class Orchestrator:
             shutil.copytree(edit, build_dir)
             if rec.get("parent"):     # the published chain under parent/ (not uploaded: it is public already)
                 self._materialize_chain(rec["parent"], build_dir / "parent")
-            if not self.d.executor.ready():
-                continue                       # eval_machine is renting or setting it up
-            try:
-                adm = self.d.executor.admit(sid, build_dir, registry.load_base(rec["base"], self.d.registry_root))
+            ready = self._eval_ready()
+            if not ready:
+                continue                       # eval_machine is renting or setting one up
+            try:                               # a CPU job: beside an evaluation on that machine
+                adm = self.d.executor.admit(ready[0], sid, build_dir,
+                                            registry.load_base(rec["base"], self.d.registry_root))
             except Exception as e:
                 self._failed(s, "admission", e)
                 continue
@@ -698,43 +723,91 @@ class Orchestrator:
 
     # ------------------------------------------------------------------------------------------- evaluate
     def evaluate(self):
-        """One model per call, on all evaluation GPUs: the base model first (once: the reference until a first
-        champion; its results are published under models/<base>/base/), then the ADMITTED candidates in priority
-        order. A failure of the base's job or of our side backs off (never counted); a failing job of the
-        candidate's own model is counted. Partial output is kept on the host and resumed by the next call."""
-        from ..benchmarks import parse  # noqa: PLC0415
-        subs = [s for s in sorted(self.db.subs(status=("ADMITTED",)), key=self.priority) if self._due(s)]
-        if subs and not self.d.executor.ready():
-            return
-        for s in subs:
+        """Evaluations run detached on the evaluation machines, one model per machine at a time. Each tick takes in
+        the jobs that finished, then gives every idle ready machine the next model: for the ADMITTED candidates in
+        priority order, the base model first (once: the reference until a first champion; its results are published
+        under models/<base>/base/), then the candidate itself. A model stays on its machine (partial output there is
+        resumed after a failure); one whose machine is gone starts again on another. A failure of the base's job or
+        of our side backs off (never counted); a failing job of the candidate's own model is counted."""
+        jobs = self._eval_jobs()
+        for model_id, j in list(jobs.items()):
+            self._eval_poll(model_id, j)
+        jobs = self._eval_jobs()
+        idle = [n for n in self._eval_ready() if n not in {j["machine"] for j in jobs.values()}]
+        for s in sorted(self.db.subs(status=("ADMITTED",)), key=self.priority):
+            if not self._due(s):
+                continue
             rules = self.rules_for(s["sid"])
-            base_doc = registry.load_base(rules["base"], self.d.registry_root)
-            ran = False
-            for model_id in (f"base:{rules['base']}", s["sid"]):    # every champion was evaluated as an entry
-                have = self.db.results(model_id)
-                missing = [registry.load_benchmark(k, self.d.registry_root).doc
-                           for k in rules.benchmark_keys() if k not in have]
-                if not missing:
+            todo = [(m, b) for m in self._models(s, rules) if (b := self._missing(m, rules))]
+            if not todo:
+                self._scored(s)
+                continue
+            for model_id, benches in todo:
+                if model_id in jobs or not idle:
                     continue
-                if ran:
-                    return                             # one model per call: collect gets its turn in between
-                ran = True
+                on = idle.pop(0)
                 try:
-                    outs = self.d.executor.evaluate(model_id, base_doc, missing, self._salt(rules))
+                    job = self.d.executor.start(on, model_id, registry.load_base(rules["base"], self.d.registry_root),
+                                                benches, self._salt(rules))
                 except Exception as e:
-                    if model_id.startswith("base:"):   # the base model's own job: always ours
-                        return self._backoff(s, f"base evaluation: {e}")
-                    return self._failed(s, "evaluation", e)
-                for key, out in outs.items():
-                    publisher.publish_results(self.d.public, model_id, key, out)   # first: redone if it fails
-                    self.db.put_results(model_id, key, parse(out))
-                if model_id.startswith("base:"):
-                    self._publish_base_score(model_id, rules)
-            self._recovered(s)
-            self.db.update(s["sid"], "SCORED", record_patch={
-                "timeline": {**s["record"]["timeline"], "scored": self.now()}})
-            if ran:
-                return
+                    self._eval_failed(s, model_id, e)
+                    continue
+                jobs[model_id] = {"sid": s["sid"], "machine": on, "job": job,
+                                  "benchmarks": [f"{b['id']}@{b['version']}" for b in benches]}
+                self.db.set("eval_jobs", jobs)
+                log.info("evaluating %s on %s", model_id, on)
+
+    @staticmethod
+    def _models(s, rules) -> list:
+        return [f"base:{rules['base']}", s["sid"]]          # every champion was evaluated as an entry
+
+    def _missing(self, model_id, rules) -> list:
+        have = self.db.results(model_id)
+        return [registry.load_benchmark(k, self.d.registry_root).doc for k in rules.benchmark_keys() if k not in have]
+
+    def _eval_jobs(self) -> dict:
+        return self.db.get("eval_jobs") or {}
+
+    def _eval_poll(self, model_id, j):
+        """A detached evaluation job: its results taken in once it finished; dropped when its machine is gone."""
+        from ..benchmarks import parse  # noqa: PLC0415
+        s, rules = self.db.sub(j["sid"]), self.rules_for(j["sid"])
+        row = self.d.fleet.get(j["machine"])
+        if row is None or s is None or s["status"] != "ADMITTED":
+            return self._eval_drop(model_id)
+        if row["state"] != "ready":
+            return
+        benches = [registry.load_benchmark(k, self.d.registry_root).doc for k in j["benchmarks"]]
+        try:
+            outs = self.d.executor.result(j["machine"], j["job"], model_id, benches, self._salt(rules))
+        except Exception as e:
+            self._eval_drop(model_id)
+            return self._eval_failed(s, model_id, e)
+        if outs is None:
+            return
+        for key, out in outs.items():
+            publisher.publish_results(self.d.public, model_id, key, out)   # first: redone if it fails
+            self.db.put_results(model_id, key, parse(out))
+        self._eval_drop(model_id)
+        if model_id.startswith("base:"):
+            self._publish_base_score(model_id, rules)
+        if not any(self._missing(m, rules) for m in self._models(s, rules)):
+            self._scored(s)
+
+    def _eval_drop(self, model_id):
+        jobs = self._eval_jobs()
+        jobs.pop(model_id, None)
+        self.db.set("eval_jobs", jobs)
+
+    def _eval_failed(self, s, model_id, e):
+        if model_id.startswith("base:"):   # the base model's own job: always ours
+            return self._backoff(s, f"base evaluation: {e}")
+        return self._failed(s, "evaluation", e)
+
+    def _scored(self, s):
+        self._recovered(s)
+        self.db.update(s["sid"], "SCORED", record_patch={
+            "timeline": {**s["record"]["timeline"], "scored": self.now()}})
 
     def _publish_base_score(self, model_id, rules):
         """The base model's score.json, as an entry's but with no match: its accuracy per benchmark (write-once; a

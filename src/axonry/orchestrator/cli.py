@@ -3,7 +3,7 @@
   axonry-orchestrator run [--role main|eval|all] [--once]
                                                      main: intake, schedule (rents run machines), supervise, decide,
                                                      weights, janitor (bootstraps public files first); eval: the
-                                                     evaluation machine (taken on demand), collect, evaluate. Run one
+                                                     evaluation machines (taken on demand), collect, evaluate. Run one
                                                      process per role (shared SQLite, WAL).
   axonry-orchestrator status                            submissions by status
   axonry-orchestrator refresh-agents                    keep the agent backend's sign-ins valid while nothing runs
@@ -74,19 +74,17 @@ def fleet(cfg, db, rules):
                  verified_only=bool(cfg.get("vast.verified_only", False)), min_cuda=float(cfg.get("vast.min_cuda", 0)),
                  setup_minutes=int(cfg.get("vast.setup_minutes", 45)),
                  proxy_command=proxy, bundle_url=bundle_url) if cfg.get("vast.enabled", False) else None
-    cap = cfg.get("vast.max_gpus")
-    return Machines(db, str(Path(key).expanduser()), owned, vast, int(cap) if cap is not None else None)
+    return Machines(db, str(Path(key).expanduser()), owned, vast)
 
 
 def eval_executor(cfg, fl):
-    """Every evaluation runs on all GPUs of the evaluation machine."""
+    """Every evaluation runs on all GPUs of an evaluation machine."""
     from ..evaluation.executor import ExecError, SshExecutor  # noqa: PLC0415
-    from ..pool.machine import EVAL  # noqa: PLC0415
 
-    def machine():
-        row = fl.get(EVAL)
+    def machine(purpose):
+        row = fl.get(purpose)
         if row is None or row["state"] != "ready":
-            raise ExecError("no evaluation machine ready")
+            raise ExecError(f"evaluation machine {purpose} not ready")
         return fl.machine(row)
     return SshExecutor(machine, fl.key, int(cfg.get("machines.eval_gpus", 8)),
                        concurrency_per_gpu=int(cfg.get("eval.concurrency_per_gpu", 256)))
@@ -143,9 +141,12 @@ def build(cfg: Config):
         executor=eval_executor(cfg, fl), public=public_store(cfg), private=private_store(cfg),
         owner_keypair=check_published(cfg, rules, owner), comp_rules=comp_rules, price_at=cached_price(),
         scan_prs=lambda: scan(gh, comp_rules), issue_creds=issue, work_dir=cfg.path_of("state.work_dir"),
-        max_concurrent=runner.capacity,             # runs at once: the agent accounts' room (machines: vast.max_gpus)
+        max_concurrent=min(runner.capacity, int(cfg.get("machines.max_runs", runner.capacity))),
         eval_gpu_name=cfg.get("machines.eval_gpu_name", "RTX 4090"), eval_gpus=int(cfg.get("machines.eval_gpus", 8)),
         eval_idle_minutes=int(cfg.get("machines.eval_idle_minutes", 20)), burn=owner_burn(cfg),
+        eval_machines=int(cfg.get("machines.eval_machines", 1)),
+        eval_scale_up=int(cfg.get("machines.eval_scale_up", 10)),
+        eval_scale_down=int(cfg.get("machines.eval_scale_down", 5)),
         eval_image=cfg.get("machines.image")))
 
 
@@ -246,7 +247,7 @@ def cmd_calibrate(cfg, a):
             time.sleep(30)
         if state == "failed":
             raise SystemExit("the evaluation machine failed to set up (see the log); run calibrate again")
-        calibrate(eval_executor(cfg, fl), rules, root, out=Path(".state/calibration.json"))
+        calibrate(eval_executor(cfg, fl), EVAL, rules, root, out=Path(".state/calibration.json"))
     finally:
         if rented:
             fl.release(EVAL)
