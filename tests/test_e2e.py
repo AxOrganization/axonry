@@ -1633,3 +1633,7 @@ def test_an_agent_may_build_on_the_champion_instead(tmp_path):
     assert "champion/edit/edit.json" in names and "`champion/edit/` (the champion" in text
     assert orch.db.sub(se)["record"]["parent"] == sa         # what it actually stacked on
     assert orch.db.sub(se)["status"] == "PUBLISHED"
+    chain_dir = tmp_path / "chain"                           # its chain rebuilt for a child: A under champion/
+    orch._materialize_chain(se, chain_dir)
+    assert json.loads((chain_dir / "edit.json").read_text())["parent"] == "champion/edit.json"
+    assert (chain_dir / "champion" / "edit.json").exists() and not (chain_dir / "parent").exists()

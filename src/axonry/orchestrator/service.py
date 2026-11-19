@@ -767,16 +767,17 @@ class Orchestrator:
         return {"path": path, "sid": starts[path]}, None
 
     def _materialize_chain(self, sid, dest: Path):
-        """Rebuild a published edit with its whole chain: submissions/<sid>/edit/ into dest, its parent's under
-        dest/parent/, and so on (each published edit/ under its child's parent/)."""
+        """Rebuild a published edit with its whole chain: submissions/<sid>/edit/ into dest, the edit it stacks on
+        where its spec names it (dest/parent/ or dest/champion/), and so on down the chain."""
         dest = Path(dest)
         for rel, data in self._parent_files(sid).items():
             p = dest / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(data)
         parent = (self.db.sub(sid) or {}).get("record", {}).get("parent")
-        if parent:
-            self._materialize_chain(parent, dest / "parent")
+        ref = json.loads((dest / "edit.json").read_text()).get("parent") if (dest / "edit.json").exists() else None
+        if parent and ref:
+            self._materialize_chain(parent, dest / Path(ref).parent)
 
     def _publish_agent(self, sid, rec):
         d = Path(self.d.work_dir) / sid / "agent"
