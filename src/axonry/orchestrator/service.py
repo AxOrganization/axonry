@@ -914,6 +914,10 @@ class Orchestrator:
             outs = self.d.executor.result(j["machine"], j["job"], model_id, benches, self._salt(rules))
         except Exception as e:
             self._eval_drop(model_id)
+            built = s["record"].get("built_on") or [self._machine_id(EVAL)]
+            if model_id == s["sid"] and self._machine_id(j["machine"]) not in built:   # its model was never there
+                log.warning("evaluation of %s on %s: %s (ours: not counted)", model_id, j["machine"], str(e)[:200])
+                return None
             return self._eval_failed(s, model_id, e)
         if outs is None:
             return
