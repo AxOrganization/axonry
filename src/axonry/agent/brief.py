@@ -76,14 +76,16 @@ toolkit's weight-edit skill: `.claude/skills/weight-edit/` (Claude-style agents)
 (`edit.json` + `edit.npz`) that the organizer applies to the official base weights{" on top of the parent edit" if task.get("parent") else ""}.
 You do not upload weights. Benchmarks are not available to you; use the practice data only. Carry out the method
 yourself: the edits already in the toolkit (its `cases/`) are other people's results, and uploading one of them, or
-the parent unchanged, improves nothing.
+the parent unchanged, improves nothing. How the edit is found and chosen is the method's and the skill's, never your
+own rule: choices on dev sets, holdout only to confirm a frozen edit.
 {_parent(task)}{_judged(task)}
 ## Time
 - Start: {_fmt_ts(run['start'])}
 - **Deadline: {_fmt_ts(run['deadline'])}** ({(run['deadline'] - run['start']) // 3600} h). Anything uploaded later is ignored.
 - Reminders {' and '.join(f"{m} min" for m in run['wrap_minutes'])} before the deadline: then stop all other work and upload
   your best result. `axonry-time` in the sandbox prints the time left.
-- One background job of yours lasts at most 60 minutes; you are then asked to continue from the sandbox's PROGRESS.md. Run long GPU
+- One background job of yours lasts at most 60 minutes; you are then asked to continue from the sandbox's PROGRESS.md.
+  Nobody answers questions during the run: carry on with what is left yourself, never ask whether to. Run long GPU
   work detached in the sandbox (`tmux` or `nohup`), so it keeps running when a job ends, and check on it later.{budget}
 - Upload an intermediate result early and re-upload improvements: the last complete upload before the deadline counts.
   An upload still in progress at the deadline does not count, and may spoil the one before it.
