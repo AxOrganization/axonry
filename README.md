@@ -98,9 +98,9 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
    `submissions/<your hotkey>/<entry>/`. Follow the repository's README for its contents and limits, and use its
    toolkit to try your idea first. The method contributes an idea for improving the model, grounded in your own
    exploration: the behavior to change, why you think the model does it, and how the agent finds and tests the edit.
-   Findings of your exploration on practice data (measurements, a first candidate) may support it; an edit handed
-   over to apply, with no cause and no derivation by which it could be reproduced, is refused in review, and so is
-   anything from or about the evaluation benchmarks.
+   What your exploration on practice data measured and observed may explain it; an edit handed over to apply, with
+   no cause and no derivation by which it could be reproduced, is refused in review, and so is anything from or about
+   the evaluation benchmarks.
 3. **Fund the account of your hotkey's coldkey.**
    ```
    axonry-miner price                                      # the most a run costs, in USD and alpha now

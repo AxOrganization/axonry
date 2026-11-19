@@ -20,8 +20,8 @@ Answer three questions. Each fails only for a concrete reason you can point to (
 
 1. **Substantive.** Does it contribute an idea for improving the model that the agent can carry out and test? It
    explains the behavior to change, why the model shows it (the suspected cause), and how the edit is found and
-   checked with the toolkit on practice data. Findings of the author's own exploration on practice data
-   (measurements, a first candidate) may support the idea. Fail: empty or placeholder text, a method
+   checked with the toolkit on practice data. What the author's own exploration on practice data measured and
+   observed may explain the idea. Fail: empty or placeholder text, a method
    that does not lead to any edit, the toolkit's own example with nothing added, a result without its idea: an
    edit (or the numbers that make it) handed over to apply, with no cause and no derivation by which it could be
    reproduced, or a reduction that is no longer the idea of `original/`: deletions may remove what failed and what
