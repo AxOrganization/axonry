@@ -286,7 +286,7 @@ class Orchestrator:
             s["head_sha"] and {"commit": s["head_sha"], "directory": s["record"]["pr"]["directory"]}) or None
 
     def _reduces(self, s, p) -> bool:
-        """p's content is the entry's current content (at its last head) with files or lines deleted."""
+        """p's content is the entry's current content (at its last head) with files, words or punctuation deleted."""
         if not s["head_sha"] or p.digest is None:
             return False
         gh = self.d.github
@@ -306,7 +306,7 @@ class Orchestrator:
           the review         of the content the PR carries: none -> REVIEW; changes requested -> WAITING
                              REVIEW_CHANGES (a content refused once stays refused, on any PR)
           fixing             after invalid content or changes requested, and only then, a PR with the revealed
-                             content minus files or lines carries the entry (keeping its priority) and is checked and
+                             content minus files, words or punctuation carries the entry (keeping its priority) and is checked and
                              reviewed again; with the rules' reveal_hours, all fixing has that long from the first
                              problem (never extended): content still refused or invalid after it ends the entry
                              (meanwhile its originality stands: later entries are compared with it)
@@ -1031,6 +1031,26 @@ class Orchestrator:
             self.publish_weights()
         elif rules := self._in_force(self.d.chain.finalized_head()):     # the rules in force, as now in the registry
             publisher.publish_index(self.d.public, rules, self.d.registry_root)
+        self._reopen_refused()
+
+    def _reopen_refused(self):
+        """Once: entries a review refused when that still ended them (never run) may now be fixed by deletions like
+        any other, their window starting now. Their content stays refused; the record they were ended with is
+        withdrawn (a submission's record is written once, when it ends)."""
+        if self.db.get("reopened_refused"):
+            return
+        for s in self.db.subs(status=("REJECTED",)):
+            if s["reason_code"] != "REVIEW_CHANGES" or s["locked_commit"]:
+                continue
+            rec, sid = s["record"], s["sid"]
+            hours = None if s["hotkey"] == self.d.owner_keypair.ss58_address \
+                else self.rules_for(sid).doc.get("reveal_hours")
+            self.d.public.delete_prefix(layout.submission(sid, "submission.json"))
+            self.db.update(sid, "WAITING", decided_at=None, record_patch={
+                "pr_result": None, "refused": {self._content(s): (s["reason"] or "")[:600]},
+                "fix_by": int(self.now() + float(hours) * 3600) if hours is not None else 0})
+            log.info("%s: refused by review; may now be fixed by deletions", sid)
+        self.db.set("reopened_refused", True)
 
     def refresh_weights(self, max_age=86400):
         """Re-issue weights.json when it is old, another base model's line is in force, the owner's burned share

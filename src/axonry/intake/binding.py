@@ -8,11 +8,13 @@ enter): deposits are transfers from that coldkey.
 A PR carries the submission when it is open in submissions/<hotkey>/<entry>/, by the committed GitHub id, with
 exactly the committed content, and was opened after the commitment's block. A content committed earlier by another hotkey is a copy.
 The content may only shrink: to fix what a review or the content checks found, a PR whose content is the current one with
-files or lines deleted carries it from then on (and no earlier version does); nothing can be added or rewritten.
+files, words or punctuation deleted carries it from then on (and no earlier version does); nothing can be added or
+rewritten, not even within a word.
 When the rules set reveal_hours, the first PR carrying it must also be opened within that many hours of the
 commitment: a commitment whose content nobody can see must not hold its priority indefinitely.
 """
 import json
+import re
 
 # public, stable reason codes
 NO_PR = "NO_PR"                          # no open PR carries the committed content yet
@@ -34,11 +36,15 @@ class Rejected:
 
 
 def reduces(new: dict, old: dict) -> bool:
-    """New content is the old one with files or lines deleted, nothing added or changed: every file of new is a file
-    of old whose lines are a subsequence of its lines, in order."""
-    def subsequence(a: bytes, b: bytes) -> bool:       # lines split at "\n" only: as a text editor shows them
-        rest = iter(b.split(b"\n"))
-        return all(any(x == y for y in rest) for x in a.split(b"\n"))
+    """New content is the old one with deletions only: every file of new is a file of old whose words and punctuation
+    marks are a subsequence of its own, in order (whitespace aside). Whole words go or stay: no word is cut into
+    another; whether what is left is still the same idea is the review's call."""
+    def tokens(data: bytes) -> list:
+        return re.findall(rb"\w+|[^\w\s]", data)
+
+    def subsequence(a: bytes, b: bytes) -> bool:
+        rest = iter(tokens(b))
+        return all(any(x == y for y in rest) for x in tokens(a))
     return bool(new) and new != old and all(k in old and subsequence(v, old[k]) for k, v in new.items())
 
 

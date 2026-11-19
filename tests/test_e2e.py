@@ -1521,3 +1521,31 @@ def test_fixing_has_one_window_from_the_first_problem(tmp_path):
     orch.intake()                                        # refused again after the window: no second one
     s = orch.db.sub(sid)
     assert (s["status"], s["reason_code"]) == ("REJECTED", "REVIEW_CHANGES")
+
+
+def test_deletions_are_of_whole_words_and_punctuation():
+    from axonry.intake.binding import reduces
+    old = {"METHOD.md": b"6. **Optional, with time left: re-derive** it\nrun x --dirs data/d.npz --alpha 1\n",
+           "data/d.txt": b"a b\n"}
+    assert reduces({"METHOD.md": b"6. **re-derive** it\nrun x --alpha 1\n"}, old)          # inside lines, file gone
+    assert not reduces({"METHOD.md": b"6. **Option re-derive** it\nrun x --alpha 1\n"}, old)  # a word cut short
+    assert not reduces({"METHOD.md": b"6. **re-derive** it now\nrun x --alpha 1\n"}, old)     # a word added
+    assert not reduces({"METHOD.md": b"run x --alpha 1\n6. **re-derive** it\n"}, old)          # reordered
+
+
+def test_entries_refused_before_fixing_existed_get_their_window_once(tmp_path):
+    orch, chain, clock, n, full = refused_entry(tmp_path, reveal_hours=24)
+    sid, gh = "0000000101-0001", orch.d.github
+    orch.db.update(sid, "REJECTED", decided_at=clock.t, record_patch={"fix_by": None})   # as such entries were ended
+    orch.d.public.put(layout.submission(sid, "submission.json"), b"{}")
+    orch.bootstrap()
+    s = orch.db.sub(sid)
+    assert s["status"] == "WAITING" and s["record"]["fix_by"] == int(clock.t + 24 * 3600)
+    assert orch.d.public.get(layout.submission(sid, "submission.json")) is None
+    gh.prs[n]["state"] = "closed"                        # the miner opens a new PR with the deletions
+    gh.add_pr(n + 1, HOTKEYS["A"], "a-amended", full | {"METHOD.md": b"method of A\nmore of A\n"})
+    orch.intake()
+    assert orch.db.sub(sid)["status"] == "REVIEW" and orch.db.sub(sid)["pr_number"] == n + 1
+    orch.db.update(sid, "REJECTED")
+    orch.bootstrap()                                     # once only
+    assert orch.db.sub(sid)["status"] == "REJECTED"
