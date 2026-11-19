@@ -176,7 +176,7 @@ class Fleet:
             return "ready"
         try:
             if self.clock() - row["created_at"] > self.setup_s:
-                raise SetupFailed(f"not ready within {self.setup_s // 60} min")
+                raise SetupFailed(f"not ready within {self.setup_s // 60} min ({row['state']}: {self._stuck(row)})")
             if row["state"] == "booting":
                 inst = self.api.show(row["provider_id"]) or {}
                 port = ((inst.get("ports") or {}).get("22/tcp") or [{}])[0].get("HostPort")
@@ -242,6 +242,17 @@ class Fleet:
                 return "failed"
             log.info("machine %s (instance %s): %s (retrying)", purpose, row["provider_id"], str(e)[:200])
             return self.get(purpose)["state"]
+
+    def _stuck(self, row) -> str:
+        """Where a machine that ran out of time stands: vast's status while booting, the setup log's tail after."""
+        try:
+            if row["state"] == "booting":
+                inst = self.api.show(row["provider_id"]) or {}
+                return f"{inst.get('actual_status')}, {(inst.get('status_msg') or '').strip()[:200]}"
+            return self.ssh(self.machine(row), self.key, "tail -c 300 /root/axonry-setup.log", timeout=30,
+                            attempts=1).strip().replace("\n", " | ")
+        except Exception as e:     # only a diagnosis: the machine is given up either way
+            return f"unknown ({str(e)[:100]})"
 
     def _reachable(self, purpose, endpoints) -> Machine:
         """The first endpoint whose sshd answers: the host's direct port, else vast's ssh relay (some hosts' port
