@@ -53,8 +53,9 @@ def prepare(gh, item, contents, rules, work: Path) -> Path:
     (ws / "earlier" / "INDEX.md").write_text("\n".join(index) + "\n")
     benches = ", ".join(registry.load_benchmark(k).doc["id"] for k in rules.benchmark_keys())
     (ws / "PROMPT.md").write_text(POLICY.read_text() + f"\nThe evaluation benchmarks: {benches}.\n\n"
-                                  "Answer with the JSON object the output schema describes. Set `read` to true only "
-                                  "if you could read every file; if a tool failed, set it to false.\n")
+                                  "Answer with the JSON object the output schema describes. Set `read` to true when you "
+                                  "read every file (another way after a tool failed counts); false only if a file stayed "
+                                  "unread.\n")
     return ws
 
 
