@@ -95,10 +95,10 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
    ```
 2. **Write your method.** Fork the competition repository and add one directory
    `submissions/<your hotkey>/<entry>/`. Follow the repository's README for its contents and limits, and use its
-   toolkit to try your idea first. The method explains the problem and how to solve it: the behavior to change, why
-   you think the model does it, and the approach that finds and makes the edit. It does not hand the agent a result
-   to apply: which layers, units, directions or values to change come out of the run, not out of your submission.
-   A recipe of results is refused in review.
+   toolkit to try your idea first. The method contributes an idea for improving the model, grounded in your own
+   exploration: the behavior to change, why you think the model does it, and how the agent finds and tests the edit.
+   Findings of your exploration (measurements, arrays, a first candidate) may support it; an edit handed over to
+   apply, with no cause and no derivation by which it could be reproduced, is refused in review.
 3. **Fund the account of your hotkey's coldkey.**
    ```
    axonry-miner price                                      # the most a run costs, in USD and alpha now
