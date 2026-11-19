@@ -170,12 +170,15 @@ def check_published(cfg, rules, keypair):
 
 
 def competition_rules(repo: Path, rules) -> dict:
-    """The competition protocol the rules pin. Refuses to run on a checkout that differs from the pin, so the
-    protocol applied is always the one the rules publish."""
+    """The competition protocol the rules pin. Refuses to run on a checkout that does not contain the pinned commit or
+    whose rules.json differs from the pin, so the protocol applied is always the one the rules publish (later toolkit
+    commits that keep rules.json apply without a new rules version)."""
     pin = rules["competition"]
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
     raw = (Path(repo) / "rules.json").read_bytes()
-    if head != pin["commit"] or sha256_hex(raw) != pin["rules_sha256"]:
+    contains = subprocess.run(["git", "merge-base", "--is-ancestor", pin["commit"], "HEAD"], cwd=repo,
+                              capture_output=True).returncode == 0
+    if not contains or sha256_hex(raw) != pin["rules_sha256"]:
         raise SystemExit(f"competition checkout {repo} is at {head[:12]} (rules {sha256_hex(raw)[:12]}), but the rules "
                          f"pin {pin['commit'][:12]} (rules {pin['rules_sha256'][:12]}): "
                          "git submodule update, or pin a new version (registry pin-competition)")
