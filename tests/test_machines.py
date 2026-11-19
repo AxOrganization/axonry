@@ -244,3 +244,17 @@ def test_a_machine_downloads_the_bundle_itself_and_checks_it(tmp_path):
     url, dest = (tmp_path / "setup.tgz").as_uri(), str(tmp_path / "got.tgz")
     assert subprocess.run([sys.executable, "-c", FETCH, url, dest, sha]).returncode == 0
     assert subprocess.run([sys.executable, "-c", FETCH, url, dest, "0" * 64], capture_output=True).returncode != 0
+
+
+def test_a_running_machine_whose_sshd_never_answers_is_given_up(tmp_path):
+    clock = [1000.0]
+    f, api, remote = fleet(tmp_path, clock)
+    f.rent("qwen35-0.8b-think", "RTX 4090", 8)
+    api.status["i1"] = {"actual_status": "running", "public_ipaddr": "198.51.100.4",
+                        "ports": {"22/tcp": [{"HostPort": "40022"}]}}
+    remote.unreachable = {("198.51.100.4", 40022)}
+    assert f.advance("qwen35-0.8b-think") == "booting"          # sshd may still be starting
+    clock[0] += 9 * 60
+    assert f.advance("qwen35-0.8b-think") == "booting"
+    clock[0] += 2 * 60                                          # 11 min running, never reachable: a broken host
+    assert f.advance("qwen35-0.8b-think") == "failed" and api.destroyed == ["i1"]

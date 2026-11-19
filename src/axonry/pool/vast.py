@@ -25,6 +25,8 @@ from pathlib import Path
 
 from .machine import ROOT, Machine, MachineError, give_to_agent, probe, scp, ssh
 
+UNREACHABLE_S = 10 * 60        # a container vast.ai reports running whose sshd never answers is given up after this
+
 # on the machine: python3 -c FETCH <url> <dest> <sha256>: download, then refuse a file of another content
 FETCH = """import hashlib, sys, time, urllib.request
 url, dest, sha = sys.argv[1:4]
@@ -124,6 +126,7 @@ class Fleet:
         self.setup_s, self.proxy, self.clock = setup_minutes * 60, proxy_command, clock
         self.ssh, self.scp = remote or (ssh, scp)
         self.bundle_url = bundle_url
+        self._running_since = {}      # purpose -> when vast.ai first reported the container running
         self.dir.mkdir(parents=True, exist_ok=True)
         self._key_on_account = False
 
@@ -181,8 +184,15 @@ class Fleet:
                     raise SetupFailed(f"vast.ai could not start the container: {msg[:300]}")
                 if inst.get("actual_status") != "running" or not port:
                     return "booting"
-                m = self._reachable(purpose, [(inst["public_ipaddr"].strip(), int(port)),
-                                              (inst.get("ssh_host"), inst.get("ssh_port"))])
+                since = self._running_since.setdefault(purpose, self.clock())
+                try:
+                    m = self._reachable(purpose, [(inst["public_ipaddr"].strip(), int(port)),
+                                                  (inst.get("ssh_host"), inst.get("ssh_port"))])
+                except MachineError as e:     # running, yet no sshd answers: a broken host, not a slow one
+                    if self.clock() - since > UNREACHABLE_S and "Permission denied (publickey)" not in str(e):
+                        raise SetupFailed(f"running but unreachable over ssh for {UNREACHABLE_S // 60} min: "
+                                          f"{str(e)[:200]}") from e
+                    raise
                 bundle = Path(self.bundle())
                 fetch = ""
                 if self.bundle_url:   # the machine downloads it in the background: a far link holds up nothing
@@ -240,6 +250,7 @@ class Fleet:
         raise err or VastError("no ssh endpoint yet")
 
     def release(self, purpose, note="released"):
+        self._running_since.pop(purpose, None)
         row = self.get(purpose)
         if row is None:
             return
