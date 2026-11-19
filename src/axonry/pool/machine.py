@@ -118,6 +118,15 @@ def ssh(m: Machine, key, command: str, timeout=900, attempts=3, binary=False):
     return r.stdout if binary else r.stdout.decode(errors="replace")   # logs may hold torn multibyte characters
 
 
+def _number(field: str) -> int | None:
+    """An nvidia-smi figure; None where the driver reports none ("[N/A]"): one unreadable figure never hides the
+    rest of the sample (the run's done flag among it)."""
+    try:
+        return int(field)
+    except ValueError:
+        return None
+
+
 def sample(m: Machine, key) -> dict:
     """A run's machine at a glance: each GPU's use and the agent's one-line status (the first line of its PROGRESS.md,
     at most 20 words; None before it writes one), both public; done: the agent ran axonry-done."""
@@ -126,7 +135,7 @@ def sample(m: Machine, key) -> dict:
               " head -c 2000 /workspace/work/PROGRESS.md 2>/dev/null || true", timeout=20, attempts=1)
     gpus_out, _, rest = out.partition("---\n")
     flag, _, progress = rest.partition("---\n")
-    gpus = [dict(zip(("util_pct", "mem_used_mib", "mem_total_mib"), map(int, line.split(","))))
+    gpus = [dict(zip(("util_pct", "mem_used_mib", "mem_total_mib"), map(_number, line.split(","))))
             for line in gpus_out.splitlines() if line.strip()]
     line = next((x for x in progress.splitlines() if x.strip()), "")
     line = re.sub(r"^(status:)\s*", "", line.strip().lstrip("#*->` ").strip(), flags=re.I)

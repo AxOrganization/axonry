@@ -275,10 +275,13 @@ def detail(reader, status, line, key, color=None) -> str:
         head(f"RUN (live, sampled {_ts(run.get('sampled_at'))} UTC)")
         kv("deadline", f"{_ts(run.get('deadline'))} UTC · {_left(run.get('deadline'), now)} left")
         kv("progress", clean(run.get("note")) or st("no progress line yet", DIM))
+        gib = lambda v: "  n/a" if v is None else f"{v / 1024:5.1f}"  # noqa: E731  (the driver gave no figure)
         for i, g in enumerate(run.get("gpus") or []):
-            u = g["util_pct"]
-            bar = st("█" * (u // 5), GREEN if u >= 50 else YELLOW) + st("░" * (20 - u // 5), DIM)
-            kv("GPU " + str(i), f"{bar} {u:>3}%   {g['mem_used_mib'] / 1024:5.1f} / {g['mem_total_mib'] / 1024:.1f} GiB")
+            u = g.get("util_pct")
+            bar = st("░" * 20, DIM) if u is None else \
+                st("█" * (u // 5), GREEN if u >= 50 else YELLOW) + st("░" * (20 - u // 5), DIM)
+            kv("GPU " + str(i), f"{bar} {'n/a' if u is None else f'{u:>3}%'}   {gib(g.get('mem_used_mib'))} / "
+               f"{gib(g.get('mem_total_mib')).strip()} GiB")
     tl = sub.get("timeline") or {}
     events = sorted((v, k) for k, v in tl.items() if v and (k != "deadline" or "agent_end" not in tl))
     if events:

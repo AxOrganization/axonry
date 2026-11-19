@@ -214,6 +214,9 @@ def test_sample_parses_gpus_status_line_and_done(monkeypatch):
     monkeypatch.setattr(machine, "ssh", lambda *a, **k: "5, 1, 2\n---\ndone\n---\n")
     got = machine.sample(None, None)
     assert got["note"] is None and got["done"] is True
+    monkeypatch.setattr(machine, "ssh", lambda *a, **k: "[N/A], 23314, 24564\n---\ndone\n---\n")
+    got = machine.sample(None, None)                     # a figure the driver cannot give hides nothing else
+    assert got["gpus"] == [{"util_pct": None, "mem_used_mib": 23314, "mem_total_mib": 24564}] and got["done"] is True
 
 
 def test_offers_leave_out_hosts_vast_deverified():
