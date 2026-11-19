@@ -262,21 +262,37 @@ class Orchestrator:
             code, why = binding.UNCOMMITTED, binding.carrier_problem(s, p)
         return {"pr": p.number, "hotkey": p.hotkey, "title": p.title, "reason_code": code, "reason": why}
 
+    @staticmethod
+    def _content(s) -> str:
+        """The digest of the content the submission carries now: the committed one, or a reduction of it."""
+        return s["record"].get("content") or s["content_digest"]
+
+    def _reduces(self, s, p) -> bool:
+        rev = s["record"].get("revealed") or (     # entries carried before reductions existed: their last head
+            s["head_sha"] and {"commit": s["head_sha"], "directory": s["record"]["pr"]["directory"]})
+        if not rev or p.digest is None:
+            return False
+        gh = self.d.github
+        return binding.reduces(gh.dir_blobs(p.head, p.directory), gh.dir_blobs(rev["commit"], rev["directory"]))
+
     def advance(self, s, prs, head):
         """WAITING / REVIEW -> what the submission still lacks, in this order; -> the number of its PR, if any.
           a PR carrying it   an open PR in the hotkey's directory, by the committed GitHub id, with the committed
                              content (the PR is only the carrier: it can be rebased, or closed and another opened)
           revealed in time   with the rules' reveal_hours, the first PR carrying it is opened within that time of
                              the commitment; past it with no such PR the entry is void (REJECTED REVEAL_EXPIRED)
-          valid content      entry.json and files (the content can never change: invalid is final)
+          valid content      entry.json and files (invalid is final: the content can only shrink, see below)
           funds              the account of the coldkey owning the hotkey covers a whole run (besides what its
                              other locked entries hold); then the review fee is charged, once (it counts towards
                              the run, or is kept if review refuses the entry)
-          the review         none -> REVIEW; changes requested -> REJECTED (final, the review fee kept)
+          the review         of the content the PR carries: none -> REVIEW; changes requested -> WAITING
+                             REVIEW_CHANGES: the miner may delete what the review names (a PR with the revealed
+                             content minus files or lines carries it too) and that content is reviewed again
           approved           -> locked (tag axonry/<sid>), holding the run's maximum cost, QUEUED"""
         sid, rec = s["sid"], s["record"]
         rules = self.rules_for(sid)
-        pr = next((p for p in sorted(prs, key=lambda p: p.number) if binding.carrier_problem(s, p) is None), None)
+        pr = next((p for p in sorted(prs, key=lambda p: -p.number)          # the newest carrier
+                   if binding.carrier_problem(s, p, lambda p: self._reduces(s, p)) is None), None)
         # reveal deadline: until a PR carries it nobody sees the content its priority belongs to; without a deadline a
         # miner could commit several contents and reveal only the one a later, public entry shows to match (once a PR
         # has carried it the content is public; the owner's hotkey is not bound)
@@ -292,9 +308,11 @@ class Orchestrator:
                                    "(see status.json prs for PRs in this hotkey's directory)"
                                    + (f"; open it by {_utc(by)} or the entry is void" if by is not None else ""))
         if s["pr_number"] != pr.number or s["head_sha"] != pr.head:
-            self.db.update(sid, pr_number=pr.number, head_sha=pr.head, record_patch={"pr": {
-                "repo": getattr(self.d.github, "repo", None), "number": pr.number, "author": pr.author,
-                "directory": pr.directory, "title": pr.title, "head": pr.head}})
+            patch = {"pr": {"repo": getattr(self.d.github, "repo", None), "number": pr.number, "author": pr.author,
+                            "directory": pr.directory, "title": pr.title, "head": pr.head}, "content": pr.digest}
+            if not rec.get("revealed") and pr.digest == s["content_digest"]:   # what may only shrink
+                patch["revealed"] = {"commit": pr.head, "directory": pr.directory}
+            self.db.update(sid, pr_number=pr.number, head_sha=pr.head, record_patch=patch)
             s = self.db.sub(sid)
         if by is not None and pr.opened_at is not None and pr.opened_at > by:     # GitHub's time, not our tick's
             self._reject(sid, binding.REVEAL_EXPIRED, f"PR #{pr.number} was opened at {_utc(pr.opened_at)}, after "
@@ -319,11 +337,12 @@ class Orchestrator:
         fee = pricing.review_musd(rules)
         if fee and s["hotkey"] != self.d.owner_keypair.ss58_address:   # going to review costs the review fee, once
             self.db.charge(sid, REVIEW_FEE, coldkey, fee)
-        verdict, body = self.d.github.review_state(pr.number, s["content_digest"], pr.directory,
+        verdict, body = self.d.github.review_state(pr.number, self._content(s), pr.directory,
                                                    rules["review"]["reviewers"])
         if verdict == "changes":
             summary = (body or "changes requested").strip().split("\n\n")[0]   # the verdict; details stay on the PR
-            self._reject(sid, "REVIEW_CHANGES", f"{summary[:600]} (full review on PR #{pr.number})")
+            self._set_stage(s, "WAITING", "REVIEW_CHANGES", f"{summary[:600]} (full review on PR #{pr.number}). Only "
+                            "deletions are allowed: remove what the review names, push, and it is reviewed again")
         elif verdict is None:
             self._set_stage(s, "REVIEW", None, None)
         elif self.d.github.pr(pr.number)["mergeable"] is False:
@@ -1005,7 +1024,7 @@ class Orchestrator:
                     "title": pr.get("title"),
                     "status": "STARTING" if starting else s["status"],
                     "reason_code": None if starting else s["reason_code"], "reason": None if starting else s["reason"],
-                    "commit": s["locked_commit"] or s["head_sha"], "content_digest": s["content_digest"],
+                    "commit": s["locked_commit"] or s["head_sha"], "content_digest": self._content(s),
                     "directory": pr.get("directory"),
                     "priority": [s["prio_block"], s["prio_index"]]}
         by_prio = sorted(self.db.subs(), key=self.priority)

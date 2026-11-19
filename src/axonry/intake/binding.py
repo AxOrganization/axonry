@@ -7,6 +7,8 @@ owned the hotkey at the commitment (fixed then; a hotkey whose owner changed sin
 enter): deposits are transfers from that coldkey.
 A PR carries the submission when it is open in submissions/<hotkey>/<entry>/, by the committed GitHub id, with
 exactly the committed content, and was opened after the commitment's block. A content committed earlier by another hotkey is a copy.
+Once revealed, the content may only shrink: a PR whose content is the revealed one with files or lines deleted (to meet
+a review's request) carries it too; nothing can be added or rewritten.
 When the rules set reveal_hours, the first PR carrying it must also be opened within that many hours of the
 commitment: a commitment whose content nobody can see must not hold its priority indefinitely.
 """
@@ -31,14 +33,25 @@ class Rejected:
         self.code, self.detail = code, detail
 
 
-def carrier_problem(s, p) -> str | None:
-    """Why PR candidate p cannot carry submission s (None: it can)."""
+def reduces(new: dict, old: dict) -> bool:
+    """New content is the old one with files or lines deleted, nothing added or changed: every file of new is a file
+    of old whose lines are a subsequence of its lines, in order."""
+    def subsequence(a: bytes, b: bytes) -> bool:
+        lines = iter(b.splitlines(keepends=True))
+        return all(any(x == y for y in lines) for x in a.splitlines(keepends=True))
+    return bool(new) and new != old and all(k in old and subsequence(v, old[k]) for k, v in new.items())
+
+
+def carrier_problem(s, p, reduced=lambda p: False) -> str | None:
+    """Why PR candidate p cannot carry submission s (None: it can). reduced(p): p's content is a reduction of the
+    submission's revealed content (see reduces)."""
     if p.problem or p.hotkey != s["hotkey"]:
         return p.problem or "another hotkey's directory"
     if p.author_id != s["record"]["github_id"]:
         return f"the PR is by {p.author} (GitHub id {p.author_id}); the commitment names GitHub id {s['record']['github_id']}"
-    if p.digest != s["content_digest"]:
-        return f"the PR content {(p.digest or '')[:12]} is not the committed content {s['content_digest'][:12]}"
+    if p.digest != s["content_digest"] and not reduced(p):
+        return (f"the PR content {(p.digest or '')[:12]} is neither the committed content {s['content_digest'][:12]} "
+                "nor that content with only deletions")
     if p.opened_at is not None and p.opened_at < s["record"]["timeline"]["committed"]:
         return "the PR was opened before the commitment's block: commit first, then open the PR"
     return None

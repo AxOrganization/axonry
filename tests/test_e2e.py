@@ -537,7 +537,7 @@ def test_one_registration_one_entry(tmp_path):
     open_rules(orch, 101)
     (s,) = orch.db.subs()
     assert s["sid"] == "0000000101-0001" and s["status"] == "WAITING" and s["reason_code"] == "NO_PR"
-    assert orch.db.get("prs")["1"]["reason_code"] == "UNCOMMITTED" and "not the committed" in orch.db.get("prs")["1"]["reason"]
+    assert orch.db.get("prs")["1"]["reason_code"] == "UNCOMMITTED" and "neither the committed" in orch.db.get("prs")["1"]["reason"]
     gh.push(1, "a1", v1)                                # the PR now carries the committed content
     orch.intake()
     run_until_quiet(orch, clock)
@@ -618,7 +618,7 @@ def test_a_content_belongs_to_its_earliest_commitment(tmp_path):
     assert (sb["status"], sb["reason_code"]) == ("REJECTED", "COPY") and "0000000101-0001" in sb["reason"]
     w = orch.db.get("prs")
     assert w["1"]["reason_code"] == "PARTICIPATED"
-    assert w["2"]["reason_code"] == "UNCOMMITTED" and "not the committed" in w["2"]["reason"]
+    assert w["2"]["reason_code"] == "UNCOMMITTED" and "neither the committed" in w["2"]["reason"]
     assert w["3"]["reason_code"] == "UNCOMMITTED" and "777" in w["3"]["reason"]
     assert orch.db.of_hotkey(HOTKEYS["A"])["reason_code"] == "NO_PR"
     assert not any(orch.db.accounts()[COLDKEYS[n]]["charged_usd"] for n in "AB")
@@ -638,7 +638,7 @@ def test_disqualified_champion_hands_back_the_title(tmp_path):
 
 
 def test_review_lock_and_carrier(tmp_path):
-    """A rejected review spends the entry and, without a review fee in the rules, costs nothing. An approved one is locked at that commit and charged;
+    """A review asking for changes sends the entry back to WAITING and, without a review fee in the rules, costs nothing. An approved one is locked at that commit and charged;
     the PR is only the carrier: a rebase keeps the approval, pushes after the lock never change the entry."""
     orch, chain, clock, pub = make(tmp_path)
     gh = orch.d.github
@@ -653,8 +653,8 @@ def test_review_lock_and_carrier(tmp_path):
     gh.verdicts[(na, content_digest_of_blobs(blobs_for("A")))] = "changes"
     orch.intake()
     s = orch.db.sub(sa)
-    assert (s["status"], s["reason_code"]) == ("REJECTED", "REVIEW_CHANGES")
-    assert s["reason"].startswith("reviewer note (full review on PR #")
+    assert (s["status"], s["reason_code"]) == ("WAITING", "REVIEW_CHANGES")
+    assert s["reason"].startswith("reviewer note (full review on PR #") and "Only deletions" in s["reason"]
     assert not orch.db.accounts()[COLDKEYS["A"]]["charged_usd"]
 
     gh.verdicts[(nb, content_digest_of_blobs(blobs_for("B")))] = "approved"
@@ -1193,11 +1193,9 @@ def test_the_review_fee_is_kept_when_review_refuses_and_is_part_of_a_run(tmp_pat
     gh.verdicts[(1, content_digest_of_blobs(blobs_for("A")))] = "changes"
     gh.verdicts[(2, content_digest_of_blobs(blobs_for("B")))] = "approved"
     orch.intake()
-    assert orch.db.sub(sid_a)["status"] == "REJECTED" and orch.db.charged(sid_a) == {-2: 20 * pricing.MUSD}
-    assert json.loads(pub.get(layout.submission(sid_a, "submission.json")))["fee"]["charged_usd"] == 20   # kept for good
-    from axonry.miner.board import detail
-    reader = miner.PublicReader(store=pub)
-    assert "charged 20.00" in detail(reader, reader.get(layout.STATUS) or {}, None, sid_a, color=False)
+    assert orch.db.sub(sid_a)["reason_code"] == "REVIEW_CHANGES" and orch.db.charged(sid_a) == {-2: 20 * pricing.MUSD}
+    orch.publish_status(every=0)
+    assert json.loads(pub.get(layout.STATUS))["accounts"][COLDKEYS["A"]]["charged_usd"] == 20   # public
     s = orch.db.sub(sid_b)
     assert s["status"] == "QUEUED"                       # B paid the fee and its account (one run) still covers the run
     assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == RUN_USD - 20
@@ -1375,3 +1373,42 @@ def test_an_evaluation_whose_machine_is_gone_starts_again_on_another(tmp_path):
         orch.d.executor.jobs.pop(job)                    # its job is gone with it
     orch.evaluate()                                      # dropped; the first machine (done with the base) takes it
     assert orch._eval_jobs()[s1]["machine"] == EVAL
+
+
+def test_after_a_review_asks_for_changes_only_deletions_are_reviewed_again(tmp_path):
+    """The content can only shrink: a PR with the revealed content minus lines or files carries the entry and is
+    reviewed anew (keeping its priority and the one review fee); anything added or rewritten carries nothing."""
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    gh.approve_all = False
+    full = blobs_for("A") | {"METHOD.md": b"method of A\nscores on the benchmarks\nmore of A\n",
+                             "data/words.txt": b"alpha\nbeta\n"}
+    n = pay(orch, chain, "A", 101, 1, blobs=full)
+    chain.head = 101
+    open_rules(orch, 101)
+    sid = "0000000101-0001"
+    gh.verdicts[(n, content_digest_of_blobs(full))] = "changes"
+    orch.intake()
+    assert orch.db.sub(sid)["reason_code"] == "REVIEW_CHANGES"
+    added = full | {"METHOD.md": b"method of A\nmore of A\nsomething new\n"}
+    gh.push(n, "a-added", added)
+    orch.intake()
+    assert orch.db.sub(sid)["reason_code"] == "NO_PR"                     # not a reduction: carries nothing
+    reduced = {k: v for k, v in full.items() if k != "data/words.txt"} | {"METHOD.md": b"method of A\nmore of A\n"}
+    gh.push(n, "a-reduced", reduced)
+    orch.intake()
+    s = orch.db.sub(sid)
+    assert s["status"] == "REVIEW" and s["record"]["content"] == content_digest_of_blobs(reduced)
+    gh.verdicts[(n, content_digest_of_blobs(reduced))] = "approved"
+    orch.intake()
+    orch.schedule()
+    s = orch.db.sub(sid)
+    assert s["status"] == "RUNNING" and s["locked_commit"] == "a-reduced"
+    assert orch.d.runner.methods[sid] == "method of A\nmore of A\n"
+
+
+def test_a_binary_file_is_refused_whatever_its_name(tmp_path):
+    from axonry.intake.github import check_files
+    blobs = blobs_for("A") | {"data/dirs.txt": b"\x93NUMPY\x01\x00v\x00{'descr'"}
+    assert "not readable text" in check_files(blobs, COMP_RULES)
+    assert check_files(blobs_for("A") | {"data/words.txt": "ünïcode words\n".encode()}, COMP_RULES) is None

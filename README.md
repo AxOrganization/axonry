@@ -79,8 +79,8 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
   (`HOTKEY_MOVED`): a coldkey swap needs no consent from the coldkey it moves into.
 - Your entry is reviewed once the account covers a whole run (the maximum cost above), besides what its other
   queued or running entries still hold. Going to review costs the review fee (`fee.review_usd` in the rules): if the
-  entry runs, the fee counts towards the run, which costs only what it used; if it never runs (e.g. review refuses
-  it), the fee is kept (and the hotkey's entry is spent).
+  entry runs, the fee counts towards the run, which costs only what it used; if it never runs, the fee is kept (it
+  is charged once, however often the entry is reviewed).
 - During the run, each full GPU hour is charged as it passes; when the run ends (at the deadline, or when the
   agent says it is done), the GPU time actually used is settled and the agent's model use is charged (never more
   than the agent budget). A run that ends early costs less; what is left stays in the account. The clock
@@ -120,8 +120,9 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
    carried by then is void (`REJECTED REVEAL_EXPIRED`), so a commitment cannot keep an unseen priority and be
    revealed only once a later, public entry shows that it matches.
 5. **The pull request only carries the content.** Rebasing it, or closing it and opening another with the same
-   content, changes nothing. The content itself can never change: a different version is not your entry (and a
-   second commitment of the hotkey is ignored).
+   content, changes nothing. The content can only shrink: when a review asks for changes, delete what it names (whole
+   files or lines) and push; the rest is reviewed again, keeping your priority and the one review fee. Anything added
+   or rewritten is not your entry (and a second commitment of the hotkey is ignored).
 6. **Follow your submission.**
    ```
    axonry-miner board              # champion and queue (runs live) / not in queue and why / recent matches

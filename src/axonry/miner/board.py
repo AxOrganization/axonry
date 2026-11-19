@@ -39,7 +39,7 @@ WHY = {     # reason code -> short label
     "INSUFFICIENT_FUNDS": "insufficient funds", "COPY": "copy",
     "HOTKEY_UNKNOWN": "hotkey unknown", "BAD_PR": "bad PR", "BAD_ENTRY": "bad entry.json",
     "BASE_NOT_ALLOWED": "wrong base", "HOTKEY_MOVED": "hotkey changed owner", "REVEAL_EXPIRED": "revealed too late",
-    "BAD_PARENT": "bad parent", "REVIEW_CHANGES": "review: rejected",
+    "BAD_PARENT": "bad parent", "REVIEW_CHANGES": "review: delete and push",
     "CONFLICT": "conflict"}
 
 

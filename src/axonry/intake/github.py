@@ -176,10 +176,20 @@ def check_files(blobs: dict, comp_rules: dict) -> str | None:
     bad = [r for r in blobs if "." + r.rsplit(".", 1)[-1] not in s["allowed_extensions"]]
     if bad:
         return f"file type not allowed: {', '.join(sorted(bad)[:5])}"
+    binary = [r for r, v in blobs.items() if not _text(v)]      # every allowed type is text: a binary is disguised
+    if binary:
+        return f"not readable text (UTF-8): {', '.join(sorted(binary)[:5])}"
     size = sum(len(v) for v in blobs.values())
     if size > s["max_total_bytes"]:
         return f"{size} bytes > {s['max_total_bytes']}"
     return None
+
+
+def _text(data: bytes) -> bool:
+    try:
+        return "\x00" not in data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
 
 
 def _unix(iso: str | None) -> int | None:
