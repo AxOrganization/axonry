@@ -177,6 +177,8 @@ Everything the subnet decides is published at `https://storage.axonry.ai` and ca
   agent (model, tokens so far in millions, cost so far in USD);
 - `models/<base>/line.json`: each base model's line - its champion and their succession, every entry with its
   scores against its reference, and the base model's own accuracy;
+- `benchmarks/<id>@<version>.json` and `benchmarks/<id>@<version>/items.jsonl`: each benchmark's definition and its
+  items, exactly what the frozen manifest pins (recompute it with the toolkit's `wsp.data.manifest`);
 - `models/<base>/base/`: the base model's own score and per-question results (the reference until a first champion);
 - `submissions/<sid>/`: for every submission its final record, admission result, per-question results, score, edit
   and agent log;
