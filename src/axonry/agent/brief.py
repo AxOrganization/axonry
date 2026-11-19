@@ -49,7 +49,7 @@ def _judged(task) -> str:
         ref = "the base model (no champion yet)"
     return f"""
 ## How the edit is judged
-Against {ref}, on the evaluation's benchmarks (closed to you): the edit must be worse on none of them (beyond their noise) and clearly better on at least {j['n_win']}.
+Against {ref}, on the benchmarks: the edit must be worse on none of them (beyond their noise) and clearly better on at least {j['n_win']}.
 """
 
 
