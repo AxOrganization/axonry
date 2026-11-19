@@ -275,9 +275,10 @@ class FakeExecutor:
     """Evaluation machines: admission at once; an evaluation job finishes on the next look at it."""
 
     def __init__(self, tmp):
-        self.tmp, self.specs, self.evaluated, self.jobs = tmp, {}, [], {}
+        self.tmp, self.specs, self.evaluated, self.jobs, self.built = tmp, {}, [], {}, set()
 
     def admit(self, on, sid, spec_dir, base_doc):
+        self.built.add((on, sid))
         spec = json.loads((spec_dir / "edit.json").read_text())
         if spec.get("parent"):                          # the chain it names was rebuilt where it names it
             assert (spec_dir / spec["parent"]).exists(), spec["parent"]
@@ -289,6 +290,7 @@ class FakeExecutor:
         return {"passed": True, "violations": [], "info": {"tensors": 1}, "model_digest": "md-" + "".join(spec["ops"])}
 
     def start(self, on, model_id, base_doc, bench_docs, salt):
+        assert model_id.startswith("base:") or (on, model_id) in self.built, (on, model_id)   # its model is there
         self.evaluated.append(model_id)
         job = f"{on}/{model_id}/{len(self.evaluated)}"
         self.jobs[job] = {f"{b['id']}@{b['version']}": self.run_benchmark(model_id, b) for b in bench_docs}
@@ -1349,10 +1351,16 @@ def admitted(orch, n):
     """n candidates ADMITTED directly (their runs and admission are other tests' business)."""
     rules = registry.load_rules_versions(BASE, orch.d.registry_root)[-1]
     sids = [f"00000002{i:02d}-0001" for i in range(n)]
+    spec = next(iter(PLANS.values()))["spec"]
     for i, sid in enumerate(sids):
         orch.db.add_submission(sid, BASE, f"hk{i}", f"ck{i}", "ADMITTED",
-                               {"rules_sha256": rules.sha256, "base": BASE, "timeline": {}}, f"d{i}", (200 + i, 1))
-        orch.d.executor.specs[sid] = next(iter(PLANS.values()))["spec"]
+                               {"rules_sha256": rules.sha256, "base": BASE, "timeline": {},
+                                "model_digest": "md-" + "".join(spec["ops"])}, f"d{i}", (200 + i, 1))
+        orch.d.executor.specs[sid] = spec
+        orch.d.executor.built.add(("eval", sid))                  # admitted on the first evaluation machine
+        build = Path(orch.d.work_dir) / sid / "build"             # what admission left (any machine builds from it)
+        build.mkdir(parents=True)
+        (build / "edit.json").write_text(json.dumps(spec))
     return sids
 
 
@@ -1656,3 +1664,20 @@ def test_a_block_read_incomplete_is_read_again_later(tmp_path):
     assert cursor < 101                               # stopped before the block it could not read
     run_until_quiet(orch, clock, rounds=2)
     assert orch.db.get("cursor") >= 101 and orch.db.sub("0000000101-0001") is not None   # read again: nothing lost
+
+
+def test_a_candidate_evaluated_on_another_machine_is_built_there_first(tmp_path):
+    from axonry.pool.machine import EVAL
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.eval_machines, orch.d.eval_scale_up = 2, 0
+    s1, s2 = admitted(orch, 2)
+    orch.eval_machine()
+    ex, rules = orch.d.executor, orch.rules_for(s1)
+    for s in (s1, s2):
+        orch.db.update(s, record_patch={"built_on": [orch._machine_id(EVAL)]})
+    assert orch._model_on(EVAL, orch.db.sub(s1), rules) and (EVAL, s1) in ex.built
+    assert orch._model_on("eval-2", orch.db.sub(s1), rules) and ("eval-2", s1) in ex.built     # built there
+    orch.db.update(s2, record_patch={"model_digest": "md-other"})       # what admission built is not what comes out
+    assert not orch._model_on("eval-2", orch.db.sub(s2), rules)         # never evaluated as another model
+    assert not orch._model_on("eval-2", orch.db.sub(s2), rules)         # not the next time either
+    assert orch.db.sub(s2)["status"] == "ADMITTED"                      # ours: nothing counted against it

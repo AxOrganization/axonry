@@ -51,7 +51,7 @@ from ..evaluation.executor import JobFailed
 from ..review.auto import fixable as review_fixable
 from ..intake import binding
 from ..pool import NoMachine
-from ..pool.machine import eval_names, is_eval, keypair
+from ..pool.machine import EVAL, eval_names, is_eval, keypair
 from ..publish import publisher, redact
 from .db import DB
 
@@ -746,7 +746,7 @@ class Orchestrator:
                 self._reject(sid, "REJECTED_RULES", "; ".join(adm["violations"])[:2000])
                 continue
             self.db.update(sid, "ADMITTED", record_patch={
-                "model_digest": adm["model_digest"], "timeline": {**rec["timeline"], "admitted": self.now()}})
+                "model_digest": adm["model_digest"], "built_on": [self._machine_id(ready[0])], "timeline": {**rec["timeline"], "admitted": self.now()}})
             self._recovered(s)
 
     @staticmethod
@@ -850,6 +850,9 @@ class Orchestrator:
                 if model_id in jobs or not idle:
                     continue
                 on = idle.pop(0)
+                if model_id == s["sid"] and not self._model_on(on, s, rules):
+                    idle.insert(0, on)
+                    continue
                 try:
                     job = self.d.executor.start(on, model_id, registry.load_base(rules["base"], self.d.registry_root),
                                                 benches, self._salt(rules))
@@ -860,6 +863,31 @@ class Orchestrator:
                                   "benchmarks": [f"{b['id']}@{b['version']}" for b in benches]}
                 self.db.set("eval_jobs", jobs)
                 log.info("evaluating %s on %s", model_id, on)
+
+    def _model_on(self, on, s, rules) -> bool:
+        """A candidate's model on an evaluation machine: admission built it on one; another builds it again from the
+        same spec, which must give the same model (digest). A failure here is ours: logged, tried again next tick."""
+        sid, built = s["sid"], s["record"].get("built_on") or [self._machine_id(EVAL)]   # before: admitted on eval
+        try:
+            here = self._machine_id(on)
+            if here in built:
+                return True
+            adm = self.d.executor.admit(on, sid, Path(self.d.work_dir) / sid / "build",
+                                        registry.load_base(rules["base"], self.d.registry_root))
+            if not adm.get("passed") or adm.get("model_digest") != s["record"].get("model_digest"):
+                raise RuntimeError(f"rebuilt model {adm.get('model_digest')} != admitted "
+                                   f"{s['record'].get('model_digest')}")
+            self.db.update(sid, record_patch={"built_on": built + [here]})
+            log.info("built %s on %s", sid, on)
+            return True
+        except Exception as e:
+            log.warning("model of %s on %s: %s (tried again next tick)", sid, on, str(e)[:300])
+            return False
+
+    def _machine_id(self, name):
+        """The machine behind an evaluation machine's name (a name is rented again; an instance is not)."""
+        row = self.d.fleet.get(name)
+        return row and row["provider_id"]
 
     @staticmethod
     def _models(s, rules) -> list:
