@@ -208,10 +208,11 @@ def cmd_run(cfg, a):
         orch.bootstrap()
     interval = int(cfg.get("state.tick_seconds", 60))
     while True:
+        started = time.monotonic()
         orch.tick(a.role)
         if a.once:
             return
-        time.sleep(interval)
+        time.sleep(max(0.0, interval - (time.monotonic() - started)))   # a tick starts every interval
 
 
 def cmd_restore(cfg, a):
