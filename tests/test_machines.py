@@ -283,19 +283,41 @@ def test_an_unread_sample_keeps_the_last_reading():
     from axonry.orchestrator.service import Orchestrator
     last = {"gpus": [{"util_pct": 97, "mem_used_mib": 20000, "mem_total_mib": 24564}], "note": "screening",
             "done": False, "at": 1.0}
-    reads = iter([{"gpus": None, "note": None, "done": False}, RuntimeError("timed out")])
-
-    def sample(sid):
-        r = next(reads)
-        if isinstance(r, Exception):
-            raise r
-        return r
-    orch = SimpleNamespace(d=SimpleNamespace(fleet=SimpleNamespace(sample=sample)), now=lambda: 5.0)
-    got = Orchestrator._sample(orch, "s", last)                  # nvidia-smi unread: the GPUs stay as last read
+    orch = SimpleNamespace(now=lambda: 5.0)
+    got = Orchestrator._sample(orch, "s", {"gpus": None, "note": None, "done": False}, last)   # GPUs unread
     assert got == {"gpus": last["gpus"], "note": None, "done": False, "at": 5.0}
-    got = Orchestrator._sample(orch, "s", last)                  # the machine unreachable: the last reading stays,
-    assert got == last                                           # with its own time
+    assert Orchestrator._sample(orch, "s", RuntimeError("timed out"), last) == last   # unreachable: the last
+    assert Orchestrator._sample(orch, "s", None, last) == last                          # reading, with its time
 
+
+def test_machines_are_sampled_side_by_side(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from axonry.pool import Machines
+    from axonry.pool.machine import MachineError
+    db = DB(tmp_path / "db.sqlite")
+    for p in ("a", "b", "c"):
+        db.add_machine(p, f"v-{p}", "m", "RTX 4090", 4, 1.0, 0)
+        db.set_machine(p, state="ready", ssh_host="198.51.100.4", ssh_port=1)
+
+    class Vast:
+        def machine(self, row):
+            return row["name"]
+    seen, lock = [], threading.Lock()
+
+    def slow(m, key):
+        with lock:
+            seen.append(m)
+        time.sleep(0.3)
+        if m == "b":
+            raise MachineError("timed out")
+        return {"gpus": [], "note": m, "done": False}
+    monkeypatch.setattr("axonry.pool.sample", slow)
+    t = time.time()
+    got = Machines(db, "k", None, Vast()).sample_all(["a", "b", "c", "gone"])
+    assert time.time() - t < 0.6 and sorted(seen) == ["a", "b", "c"]            # in parallel, not 0.9 s in a row
+    assert got["a"]["note"] == "a" and isinstance(got["b"], MachineError) and "gone" not in got
 
 def test_an_evaluation_machine_gets_the_benchmark_items(tmp_path):
     clock = [1000.0]

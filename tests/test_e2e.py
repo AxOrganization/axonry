@@ -194,6 +194,9 @@ class FakeFleet:
     def vanished(self, purpose):
         return purpose in self.lost
 
+    def sample_all(self, purposes):
+        return {p: self.sample(p) for p in purposes if self.get(p)}
+
     def sample(self, purpose):
         return {"gpus": [{"util_pct": 97, "mem_used_mib": 20000, "mem_total_mib": 24564}] * 4,
                 "note": "Screening directions on 203.0.113.7; best so far +2.1", "done": purpose in self.done}

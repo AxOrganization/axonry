@@ -49,9 +49,19 @@ class Machines:
     def hand_over(self, purpose, public_key: str, deadline: int):
         return self._of(self.get(purpose)).hand_over(purpose, public_key, deadline)
 
-    def sample(self, purpose) -> dict:
-        row = self.get(purpose)
-        return sample(self.machine(row), self.key)
+    def sample_all(self, purposes) -> dict:
+        """Each machine's sample, read side by side: {purpose: its sample, or the exception reading it raised}. The
+        machines are looked up here (the DB stays in this thread); only the ssh rounds run in parallel."""
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+        machines = {p: self.machine(row) for p in purposes if (row := self.get(p)) is not None}
+
+        def one(m):
+            try:
+                return sample(m, self.key)
+            except Exception as e:  # noqa: BLE001 - one machine's failure is that machine's reading only
+                return e
+        with ThreadPoolExecutor(max_workers=max(1, len(machines))) as ex:
+            return dict(zip(machines, ex.map(one, machines.values())))
 
     def probe(self, purpose) -> dict:
         return self._of(self.get(purpose)).probe(purpose)

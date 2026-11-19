@@ -573,13 +573,15 @@ class Orchestrator:
 
     # ------------------------------------------------------------------------------------------- supervise
     def supervise(self):
-        for s in self.db.subs(status=("RUNNING",)):
+        running = self.db.subs(status=("RUNNING",))
+        samples = self.d.fleet.sample_all([s["sid"] for s in running])   # all machines at once
+        for s in running:
             sid = s["sid"]
             self._bill(s)
             r = self.db.run(sid)
             task, h, st = r["task"], RunHandle(**r["handle"]), r["sup_state"] or {}
             has_upload = self.d.private.last_modified(layout.staging_prefix(sid) + "manifest.json") is not None
-            st["live"] = self._sample(sid, st.get("live"))
+            st["live"] = self._sample(sid, samples.get(sid), st.get("live"))
             try:
                 outcome = supervisor.step(self.now(), task, h, self.d.runner, st, has_upload, st["live"].get("done"))
             except Exception as e:  # agent backend / network hiccup: retried next tick, forced stop at the deadline
@@ -1132,12 +1134,13 @@ class Orchestrator:
         return {"sid": champ["sid"], "hotkey": champ["hotkey"], "pr": pr.get("number"),
                 "title": pr.get("title")}
 
-    def _sample(self, sid, last=None) -> dict:
-        """The run's machine now: GPU use and the agent's one-line status (secrets of the run removed). What a sample
-        cannot read (a slow or sick host) keeps the last reading."""
+    def _sample(self, sid, live, last=None) -> dict:
+        """The run's machine now (live: its sample, or the exception reading it): GPU use and the agent's one-line
+        status (secrets of the run removed). What a sample cannot read (a slow or sick host) keeps the last reading."""
         last = last or {}
         try:
-            live = self.d.fleet.sample(sid)
+            if not isinstance(live, dict):
+                raise live or RuntimeError("no machine to sample")
             if live["gpus"] is None:
                 live["gpus"] = last.get("gpus")
             if live["note"]:
