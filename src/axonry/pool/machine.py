@@ -129,12 +129,16 @@ def _number(field: str) -> int | None:
 
 def sample(m: Machine, key) -> dict:
     """A run's machine at a glance: each GPU's use and the agent's one-line status (the first line of its PROGRESS.md,
-    at most 20 words; None before it writes one), both public; done: the agent ran axonry-done."""
-    out = ssh(m, key, "nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits;"
-              " echo ---; test -f /workspace/work/DONE && echo done; echo ---;"
+    at most 20 words; None before it writes one), both public; done: the agent ran axonry-done. The GPUs are read
+    apart: a sick GPU can hang nvidia-smi, and must never hide the rest (the done flag above all)."""
+    out = ssh(m, key, "test -f /workspace/work/DONE && echo done; echo ---;"
               " head -c 2000 /workspace/work/PROGRESS.md 2>/dev/null || true", timeout=20, attempts=1)
-    gpus_out, _, rest = out.partition("---\n")
-    flag, _, progress = rest.partition("---\n")
+    flag, _, progress = out.partition("---\n")
+    try:
+        gpus_out = ssh(m, key, "timeout -k 2 10 nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total "
+                       "--format=csv,noheader,nounits", timeout=20, attempts=1)
+    except MachineError:
+        gpus_out = ""
     gpus = [dict(zip(("util_pct", "mem_used_mib", "mem_total_mib"), map(_number, line.split(","))))
             for line in gpus_out.splitlines() if line.strip()]
     line = next((x for x in progress.splitlines() if x.strip()), "")

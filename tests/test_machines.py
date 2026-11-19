@@ -205,18 +205,31 @@ def test_a_state_snapshot_holds_what_is_still_in_the_wal(tmp_path):
 
 def test_sample_parses_gpus_status_line_and_done(monkeypatch):
     from axonry.pool import machine
-    out = "97, 20000, 24564\n0, 3, 24564\n---\n---\n\n# Status: " + " ".join(f"w{i}" for i in range(30)) + "\nmore\n"
-    monkeypatch.setattr(machine, "ssh", lambda *a, **k: out)
+    from axonry.pool.machine import MachineError
+
+    def remote(gpus, rest):
+        def ssh(m, key, command, **k):
+            if command.startswith("timeout -k 2 10 nvidia-smi"):
+                if isinstance(gpus, Exception):
+                    raise gpus
+                return gpus
+            return rest
+        return ssh
+    status = "---\n\n# Status: " + " ".join(f"w{i}" for i in range(30)) + "\nmore\n"
+    monkeypatch.setattr(machine, "ssh", remote("97, 20000, 24564\n0, 3, 24564\n", status))
     got = machine.sample(None, None)
     assert got["gpus"] == [{"util_pct": 97, "mem_used_mib": 20000, "mem_total_mib": 24564},
                            {"util_pct": 0, "mem_used_mib": 3, "mem_total_mib": 24564}]
     assert got["note"] == " ".join(f"w{i}" for i in range(20)) and got["done"] is False
-    monkeypatch.setattr(machine, "ssh", lambda *a, **k: "5, 1, 2\n---\ndone\n---\n")
+    monkeypatch.setattr(machine, "ssh", remote("5, 1, 2\n", "done\n---\n"))
     got = machine.sample(None, None)
     assert got["note"] is None and got["done"] is True
-    monkeypatch.setattr(machine, "ssh", lambda *a, **k: "[N/A], 23314, 24564\n---\ndone\n---\n")
+    monkeypatch.setattr(machine, "ssh", remote("[N/A], 23314, 24564\n", "done\n---\n"))
     got = machine.sample(None, None)                     # a figure the driver cannot give hides nothing else
     assert got["gpus"] == [{"util_pct": None, "mem_used_mib": 23314, "mem_total_mib": 24564}] and got["done"] is True
+    monkeypatch.setattr(machine, "ssh", remote(MachineError("`nvidia-smi` timed out"), "done\n---\nstill here\n"))
+    got = machine.sample(None, None)                     # a sick GPU hangs nvidia-smi: the done flag still comes
+    assert got["gpus"] == [] and got["done"] is True and got["note"] == "still here"
 
 
 def test_offers_leave_out_hosts_vast_deverified():
