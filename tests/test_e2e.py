@@ -1593,3 +1593,19 @@ def test_a_run_is_told_the_champion_it_must_beat_and_gets_its_edit(tmp_path):
     names, text = orch.d.runner.bundles["0000000110-0001"]
     assert "champion/edit/edit.json" in names and not any(n.startswith("parent/") for n in names)
     assert f"Against the champion `{sa}`," in text and "clearly better on at least 2" in text
+
+
+def test_a_parent_can_be_the_champion_when_the_run_starts(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1, parent="champion")         # no champion yet: from the base model
+    chain.head = 101
+    open_rules(orch, 101)
+    run_until_quiet(orch, clock, rounds=6)
+    sb = "0000000101-0001"
+    assert orch.db.sub(sb)["reason_code"] == "NEW_CHAMPION" and not orch.d.runner.saw_parent[sb]
+    pay(orch, chain, "E", 110, 1, parent="champion")          # now the champion is A's entry: E starts from it
+    chain.head = 110
+    orch.intake()
+    run_until_quiet(orch, clock, rounds=2)
+    se = "0000000110-0001"
+    assert orch.d.runner.saw_parent[se] and orch.db.sub(se)["record"]["parent"] == sb

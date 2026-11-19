@@ -28,6 +28,7 @@ INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS"
 BAD_PR = "BAD_PR"
 BAD_ENTRY = "BAD_ENTRY"
 BASE_NOT_ALLOWED = "BASE_NOT_ALLOWED"
+CHAMPION = "champion"                    # entry.json parent: the champion when the run starts
 
 
 class Rejected:
@@ -79,10 +80,11 @@ def check_entry(entry_bytes: bytes | None, rules, comp_rules: dict) -> Rejected 
     if entry["base"] != rules["base"]:
         return Rejected(BASE_NOT_ALLOWED, f"base {entry['base']} is not the base of the rules, {rules['base']}")
     parent = entry.get("parent")
-    if parent is not None:
+    if parent is not None and parent != CHAMPION:
         from ..common.ids import SID_RE  # noqa: PLC0415
         if not isinstance(parent, str) or not SID_RE.match(parent):
-            return Rejected(BAD_ENTRY, f"entry.json parent must be a submission id or null, not {parent!r}")
+            return Rejected(BAD_ENTRY, f"entry.json parent must be a submission id, {CHAMPION!r} or null, "
+                                       f"not {parent!r}")
     return entry
 
 

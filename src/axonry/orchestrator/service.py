@@ -401,7 +401,9 @@ class Orchestrator:
                 return pr.number
             self.db.lock(sid, pr.head, coldkey, pricing.run_cost_musd(rules), record_patch={
                 "pr": {**self.db.sub(sid)["record"]["pr"], "locked_commit": pr.head, "lock_tag": f"axonry/{sid}"},
-                "coldkey": coldkey, "base": entry["base"], "parent": entry.get("parent"),
+                "coldkey": coldkey, "base": entry["base"],
+                **({"parent_is_champion": True} if entry.get("parent") == binding.CHAMPION
+                   else {"parent": entry.get("parent")}),
                 "fee": {"usd_per_gpu_hour": rules["fee"]["usd_per_gpu_hour"], "gpus": rules["run"]["gpus"],
                         "max_hours": rules["run"]["hours"], "max_agent_usd": rules["run"]["max_agent_usd"],
                         "max_usd": pricing.run_cost_musd(rules) / 1e6},
@@ -429,7 +431,7 @@ class Orchestrator:
         """A stacking parent must be a published (not disqualified) submission on the same base.
         -> (problem or None, final: the parent can never qualify)."""
         parent = entry.get("parent")
-        if not parent:
+        if not parent or parent == binding.CHAMPION:    # the champion is resolved when the run starts
             return None, False
         p = self.db.sub(parent)
         if p and p["status"] == "PUBLISHED" and p["record"].get("base") == entry["base"]:
@@ -503,6 +505,10 @@ class Orchestrator:
 
     def _provision(self, s, rules):
         sid, rec = s["sid"], s["record"]
+        if rec.get("parent_is_champion"):     # the champion now (each start: a rerun takes the new one)
+            champ = self.db.champion(rec["base"])
+            self.db.update(sid, record_patch={"parent": champ["sid"] if champ else None})
+            rec = self.db.sub(sid)["record"]
         blobs = self.d.github.dir_blobs(s["locked_commit"], rec["pr"]["directory"])
         run = rules["run"]
         start = self.now()
