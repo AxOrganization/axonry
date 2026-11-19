@@ -23,6 +23,7 @@ class FakeHost:
     def __init__(self, gpus=8, name="NVIDIA GeForce RTX 4090"):
         self.gpus, self.name, self.done, self.fail, self.containers = gpus, name, set(), {}, {}
         self.started, self.jumps, self.copied, self.down, self.held = [], {}, [], False, {}
+        self.no_rsync = False
 
     def ssh(self, m, key, command, timeout=0, attempts=3):
         if self.down:
@@ -32,6 +33,8 @@ class FakeHost:
             return ""
         if command.startswith("sha256sum "):
             return self.held.get(command.split()[1], "") + "\n"
+        if command.startswith("command -v rsync"):
+            return "" if self.no_rsync else "/usr/bin/rsync\n"
         if command.startswith("nvidia-smi"):
             return "\n".join([self.name] * self.gpus) + "\n"
         if not command.startswith("/srv/axonry/host/host.sh "):
@@ -332,3 +335,13 @@ def test_a_new_bundle_goes_to_a_host_as_a_delta_against_the_one_it_holds(tmp_pat
     seed = next(c for c in cmds if "ls -t /srv/axonry/host/setup-*.tar" in c)   # the newest held bundle as its basis
     clean = next(c for c in cmds if "-delete" in c)                            # older bundles go only afterwards
     assert cmds.index(seed) < cmds.index(clean) and f"! -name {dst.rsplit('/', 1)[1]}" in clean
+
+
+def test_a_host_without_rsync_gets_the_whole_bundle(tmp_path):
+    clock, fake = [1000.0], FakeHost()
+    fake.no_rsync, sent = True, []
+    fake.rsync = lambda *a, **k: sent.append(a)
+    host = [{"name": "rig", "address": "203.0.113.5", "port": 9000, "role": "run", "china": True}]
+    p, _ = pool(tmp_path, host, fake, clock)
+    assert p.rent("s1", "RTX 4090", 4) and p.advance("s1") == "booting"
+    assert not sent and [d for d in fake.copied if "/setup-" in d]

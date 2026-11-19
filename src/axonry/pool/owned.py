@@ -115,13 +115,13 @@ class OwnedPool:
                                  timeout=120) or "").strip()
         if held() == want:
             return
-        if not basis:
-            self.scp(h, self.key, [path], remote)
-            return
         q = shlex.quote(remote)
-        self.ssh(h, self.key, f"[ -f {q} ] || {{ old=$(ls -t {basis} 2>/dev/null | head -1); "
-                              f"[ -z \"$old\" ] || cp \"$old\" {q}; }}; true", timeout=120)
-        self.rsync(h, self.key, path, remote)
+        if not basis or "rsync" not in (self.ssh(h, self.key, "command -v rsync; true", timeout=60) or ""):
+            self.scp(h, self.key, [path], remote)       # nothing to build on, or no rsync there: the whole file
+        else:
+            self.ssh(h, self.key, f"[ -f {q} ] || {{ old=$(ls -t {basis} 2>/dev/null | head -1); "
+                                  f"[ -z \"$old\" ] || cp \"$old\" {q}; }}; true", timeout=120)
+            self.rsync(h, self.key, path, remote)
         if held() != want:
             raise MachineError(f"{h.name}: {remote} does not match after the transfer")
 
