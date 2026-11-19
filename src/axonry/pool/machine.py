@@ -5,6 +5,7 @@ A machine is a container of the pinned image set up by setup.sh: /srv/axonry (th
 evaluation jobs) belongs to root, the agent logs in as the unprivileged user `agent`. A machine behind a jump host
 (an owned host's container, whose sshd listens on the host's loopback) is reached through that host's sshd.
 """
+import gzip
 import hashlib
 import io
 import json
@@ -174,7 +175,13 @@ def setup_bundle(project: Path, competition: Path, base_docs: list, bench_docs: 
     dest.parent.mkdir(parents=True, exist_ok=True)
     wsp = subprocess.run(["git", "-C", str(competition), "archive", "--format=tar", "HEAD"], capture_output=True,
                          check=True).stdout
-    with tarfile.open(dest, "w:gz") as tf:
+    def plain(ti):   # no build time, owner or mode bits from this checkout: the same content gives the same bundle
+        if "__pycache__" in ti.name:
+            return None
+        ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, 0, "", ""
+        return ti
+
+    with gzip.GzipFile(dest, "wb", mtime=0) as gz, tarfile.open(fileobj=gz, mode="w") as tf:
         def add(name, data, mode=0o644):
             ti = tarfile.TarInfo(name)
             ti.size, ti.mode = len(data), mode
@@ -182,10 +189,9 @@ def setup_bundle(project: Path, competition: Path, base_docs: list, bench_docs: 
         for f in ("setup.sh", "stage_base.py"):
             add(f, (HERE / f).read_bytes(), 0o755)
         pkg = io.BytesIO()
-        with tarfile.open(fileobj=pkg, mode="w:gz") as p:
+        with gzip.GzipFile(fileobj=pkg, mode="wb", mtime=0) as pz, tarfile.open(fileobj=pz, mode="w") as p:
             for rel in ("pyproject.toml", "README.md", "src"):
-                p.add(project / rel, arcname=f"axonry/{rel}",
-                      filter=lambda ti: None if "__pycache__" in ti.name else ti)
+                p.add(project / rel, arcname=f"axonry/{rel}", filter=plain)
         add("axonry.tar.gz", pkg.getvalue())
         add("wsp.tar", wsp)
         for doc in base_docs:
