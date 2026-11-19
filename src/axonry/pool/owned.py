@@ -99,12 +99,19 @@ class OwnedPool:
                                   f"! -name setup-{sha}.tgz -delete", timeout=60)
             self.scp(h, self.key, [HERE / "host.sh"], f"{HOST_DIR}/host.sh")
             self.scp(h, self.key, [HERE / "container_init.sh", keys], f"{HOST_DIR}/init/")
-            self.scp(h, self.key, [bundle], remote)
+            self._upload(h, bundle, remote)
             if self.hosts[name]["role"] == "eval":
-                self.scp(h, self.key, [self.items()], f"{HOST_DIR}/items.tar")
+                self._upload(h, Path(self.items()), f"{HOST_DIR}/items.tar")
             self.ssh(h, self.key, f"chmod 755 {HOST_DIR}/host.sh {HOST_DIR}/init/container_init.sh", timeout=60)
             self._pushed[name] = sha
         return sha
+
+    def _upload(self, h, path: Path, remote: str):
+        """scp unless the host already holds this exact file (a link to a far host can take many minutes)."""
+        want = hashlib.sha256(path.read_bytes()).hexdigest()
+        have = self.ssh(h, self.key, f"sha256sum {shlex.quote(remote)} 2>/dev/null | cut -c1-64; true", timeout=120)
+        if (have or "").strip() != want:
+            self.scp(h, self.key, [path], remote)
 
     def _step(self, name, step, args) -> bool:
         """A detached host step: True once done; raises SetupFailed with its log when it failed (the next call

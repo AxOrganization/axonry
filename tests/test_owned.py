@@ -1,5 +1,6 @@
 """Owned GPU hosts (pool/owned.py) and the machine router (pool/__init__.py), against a fake host; the agent's ssh files
 through a jump host; redaction of a run's secrets from its published log."""
+import hashlib
 import io
 import json
 import re
@@ -20,7 +21,7 @@ class FakeHost:
 
     def __init__(self, gpus=8, name="NVIDIA GeForce RTX 4090"):
         self.gpus, self.name, self.done, self.fail, self.containers = gpus, name, set(), {}, {}
-        self.started, self.jumps, self.copied, self.down = [], {}, [], False
+        self.started, self.jumps, self.copied, self.down, self.held = [], {}, [], False, {}
 
     def ssh(self, m, key, command, timeout=0, attempts=3):
         if self.down:
@@ -28,6 +29,8 @@ class FakeHost:
         if m.jump:                                         # inside a container (through the jump host)
             assert m.jump and m.jump.user == "root" and m.ip == "127.0.0.1"
             return ""
+        if command.startswith("sha256sum "):
+            return self.held.get(command.split()[1], "") + "\n"
         if command.startswith("nvidia-smi"):
             return "\n".join([self.name] * self.gpus) + "\n"
         if not command.startswith("/srv/axonry/host/host.sh "):
@@ -57,6 +60,8 @@ class FakeHost:
 
     def scp(self, m, key, srcs, dst, timeout=0):
         self.copied.append(dst)
+        if len(srcs) == 1:
+            self.held[dst] = hashlib.sha256(srcs[0].read_bytes()).hexdigest()
 
 
 def pool(tmp_path, hosts, fake, clock):
@@ -233,3 +238,15 @@ def test_benchmark_items_are_built_checked_and_packed(tmp_path):
     bad = [{**docs[0], "items_manifest_sha256": "frozen-other"}]
     with pytest.raises(RuntimeError, match="amc23@1: items m-bench:amc2 != frozen frozen-other"):
         benchdata.build(comp, bad, tmp_path / "state")
+
+
+def test_a_file_the_host_already_holds_is_not_sent_again(tmp_path):
+    clock, fake = [1000.0], FakeHost()
+    host = [{"name": "rig", "address": "203.0.113.5", "port": 9000, "role": "run", "china": True}]
+    p, _ = pool(tmp_path, host, fake, clock)
+    assert p.rent("s1", "RTX 4090", 4) and p.advance("s1") == "booting"
+    bundles = [d for d in fake.copied if "/setup-" in d]
+    assert len(bundles) == 1
+    p2, _ = pool(tmp_path, host, fake, clock)                     # a restarted orchestrator, same bundle
+    assert p2.advance("s1") == "booting"
+    assert [d for d in fake.copied if "/setup-" in d] == bundles  # the host holds it: no second upload
