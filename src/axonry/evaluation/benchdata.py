@@ -102,6 +102,20 @@ def build(competition: Path, bench_docs, dest_dir: Path) -> Path:
     return out
 
 
+def publish(public, pack: Path, bench_docs) -> list:
+    """Every benchmark's items from a pack (built only when all match their frozen manifests) to the public bucket,
+    beside its definition: the evaluation is public, item by item. -> the keys written."""
+    from ..common import layout  # noqa: PLC0415
+    keys = []
+    with tarfile.open(pack) as tf:
+        for b in bench_docs:
+            data = tf.extractfile(f"data/bench_{b['task'].split(':', 1)[1]}.jsonl").read()
+            key = layout.benchmark_items(b["id"], b["version"])
+            public.put(key, data, "application/x-ndjson")
+            keys.append(key)
+    return keys
+
+
 def main(argv=None):
     arg = (argv or sys.argv[1:])[0]
     if arg == "build":

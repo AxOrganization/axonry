@@ -18,6 +18,8 @@
   axonry-orchestrator registry pin-bench KEY            items_manifest_sha256 of the items built now (benchmarks/sources.py)
   axonry-orchestrator registry pin-competition          competition commit + rules.json sha256 into the latest rules
   axonry-orchestrator publish-registry                  publish definitions to the public bucket
+  axonry-orchestrator publish-items                     build the rules' benchmark items (checked against their frozen
+                                                     manifests) and publish them beside their definitions
 Configuration: config/axonry.toml (see config/example.toml); secrets from the environment.
 """
 import argparse
@@ -312,6 +314,7 @@ def main(argv=None):
     rs = sub.add_parser("restore-state", help="replace the local state DB by a snapshot (default: the latest)")
     rs.add_argument("--key")
     sub.add_parser("publish-registry")
+    sub.add_parser("publish-items")
     dq = sub.add_parser("disqualify", help="public owner ruling: an evaluated submission broke the rules")
     dq.add_argument("sid")
     dq.add_argument("--reason", required=True)
@@ -346,6 +349,13 @@ def main(argv=None):
     elif a.cmd == "publish-registry":
         from ..publish.publisher import publish_registry  # noqa: PLC0415
         publish_registry(public_store(cfg))
+    elif a.cmd == "publish-items":
+        from ..evaluation import benchdata  # noqa: PLC0415
+        rules = registry.latest_rules()
+        docs = [registry.load_benchmark(k).doc for k in rules.benchmark_keys()]
+        pack = benchdata.build(cfg.path_of("competition.local_path"), docs, cfg.path_of("state.work_dir"))
+        for key in benchdata.publish(public_store(cfg), pack, docs):
+            print(key)
     elif a.reg == "pin-base":
         print(json.dumps(pin_base(a.base_id, a.model_dir, cfg.path_of("competition.local_path")), indent=1)[:2000])
     elif a.reg == "pin-bench":

@@ -294,3 +294,22 @@ def test_a_pack_in_an_older_layout_is_built_again(tmp_path, monkeypatch):
     out = benchdata.build(tmp_path / "comp", docs, tmp_path / "state")
     with tar_mod.open(out) as tf:
         assert sorted(tf.getnames()) == ["data", "data/bench_gsm8k500.jsonl"]
+
+
+def test_the_items_are_published_beside_their_definitions(tmp_path):
+    import tarfile as tar_mod
+
+    from axonry.common import layout
+    from axonry.common.store import LocalStore
+    from axonry.evaluation import benchdata
+    src = tmp_path / "pack" / "data"
+    src.mkdir(parents=True)
+    (src / "bench_gsm8k500.jsonl").write_text('{"id": "g1"}\n')
+    pack = tmp_path / "items.tar"
+    with tar_mod.open(pack, "w") as tf:
+        tf.add(src, arcname="data")
+    pub = LocalStore(tmp_path / "public", public=True)
+    docs = [{"id": "gsm8k500", "version": 1, "task": "bench:gsm8k500"}]
+    assert benchdata.publish(pub, pack, docs) == ["benchmarks/gsm8k500@1/items.jsonl"]
+    assert pub.get(layout.benchmark_items("gsm8k500", 1)) == b'{"id": "g1"}\n'
+    assert not layout.is_mutable(layout.benchmark_items("gsm8k500", 1))       # write-once

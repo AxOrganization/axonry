@@ -21,6 +21,11 @@ def benchmark_def(bench_id: str, version: int) -> str:
     return f"benchmarks/{bench_id}@{version}.json"
 
 
+def benchmark_items(bench_id: str, version: int) -> str:
+    """A benchmark's items, public (write-once): exactly what its frozen manifest pins."""
+    return f"benchmarks/{bench_id}@{version}/items.jsonl"
+
+
 def rules_version(rules_sha256: str) -> str:
     return f"rules/{rules_sha256}.json"
 
