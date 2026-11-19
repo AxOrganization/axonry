@@ -211,6 +211,7 @@ class FakeRunner:
 
     def __init__(self, private, tmp):
         self.private, self.tmp, self.kicked, self.saw_parent, self.methods, self.bundles = private, tmp, [], {}, {}, {}
+        self.start_on = {}                               # sid -> "champion": the agent builds on the champion
 
     def keep_alive(self):
         pass
@@ -241,8 +242,9 @@ class FakeRunner:
         out.mkdir(parents=True, exist_ok=True)
         (out / "edit.json").write_text(json.dumps(PLANS[n]["spec"]))
         (out / "REPORT.md").write_text(f"plan {n}")
-        if parent_files:                                 # stacking: the spec names the chain, which is not uploaded
-            spec = {**PLANS[n]["spec"], "parent": "parent/edit.json"}
+        start = self.start_on.get(h.sid) or ("parent" if parent_files else None)
+        if start:                                        # stacking: the spec names the chain, which is not uploaded
+            spec = {**PLANS[n]["spec"], "parent": f"{start}/edit.json"}
             (out / "edit.json").write_text(json.dumps(spec))
         man = make_manifest(out)
         for f in man["files"]:
@@ -277,6 +279,8 @@ class FakeExecutor:
 
     def admit(self, on, sid, spec_dir, base_doc):
         spec = json.loads((spec_dir / "edit.json").read_text())
+        if spec.get("parent"):                          # the chain it names was rebuilt where it names it
+            assert (spec_dir / spec["parent"]).exists(), spec["parent"]
         spec.pop("parent", None)
         self.specs[sid] = spec
         if "too_big" in spec["ops"]:
@@ -1609,3 +1613,23 @@ def test_a_parent_can_be_the_champion_when_the_run_starts(tmp_path):
     run_until_quiet(orch, clock, rounds=2)
     se = "0000000110-0001"
     assert orch.d.runner.saw_parent[se] and orch.db.sub(se)["record"]["parent"] == sb
+
+
+def test_an_agent_may_build_on_the_champion_instead(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    run_until_quiet(orch, clock, rounds=6)
+    sa = "0000000101-0001"
+    assert orch.db.sub(sa)["reason_code"] == "NEW_CHAMPION"
+    pay(orch, chain, "E", 110, 1)                             # no parent given: the bundle still has the champion
+    chain.head = 110
+    orch.intake()
+    se = "0000000110-0001"
+    orch.d.runner.start_on[se] = "champion"
+    run_until_quiet(orch, clock, rounds=6)
+    names, text = orch.d.runner.bundles[se]
+    assert "champion/edit/edit.json" in names and "`champion/edit/` (the champion" in text
+    assert orch.db.sub(se)["record"]["parent"] == sa         # what it actually stacked on
+    assert orch.db.sub(se)["status"] == "PUBLISHED"

@@ -26,16 +26,18 @@ def limits_from(comp_rules: dict) -> dict:
 
 
 def _parent(task) -> str:
-    p = task.get("parent")
-    if not p:
+    parent = (task.get("parent") or {}).get("sid")
+    champ = (task.get("judge") or {}).get("champion")
+    starts = ([f"`parent/edit/` (the entry's parent, `{parent}`)"] if parent else []) + \
+             ([f"`champion/edit/` (the champion, `{champ}`)"] if champ and champ != parent else [])
+    if not starts:
         return ""
     return f"""
-## Starting point: the parent edit
-This entry stacks on the published submission `{p['sid']}`: its edit (with its own parents) is in this bundle under
-`parent/edit/`. Copy it to the sandbox as `parent/edit/` next to task.json (where `axonry-check` looks for it) and
-start the case from it (`python -m wsp.case init <case> ... --parent parent/edit/edit.json`). Your edit is a new
-layer on that model: keep its `"parent"` (wsp.upload writes it as `parent/edit.json`); the limits apply to your own
-ops, measured against the parent model.
+## Starting point
+Published edits in this bundle: {" and ".join(starts)}, each with its own parents. To build on one, copy it to the
+sandbox under the same name next to task.json (where `axonry-check` looks for it) and start the case from it
+(`python -m wsp.case init <case> ... --parent <name>/edit/edit.json`): your edit is a new layer on that model, its
+`"parent"` names it (`<name>/edit.json`), and the limits apply to your own ops, measured against it.
 """
 
 
@@ -73,7 +75,7 @@ earlier versions of it, or anything else about it or the evaluation benchmarks e
 Improve base model `{task['base']}` on the benchmarks by **editing its weights directly** (method guide: the
 toolkit's weight-edit skill: `.claude/skills/weight-edit/` (Claude-style agents) or `.agents/skills/weight-edit/`
 (Codex), same content, under `/workspace/WeightSpaceProgramming/`; toolkit README alongside), producing an edit spec
-(`edit.json` + `edit.npz`) that the organizer applies to the official base weights{" on top of the parent edit" if task.get("parent") else ""}.
+(`edit.json` + `edit.npz`) that the organizer applies to the official base weights (and the edit it stacks on).
 You do not upload weights. Benchmarks are not available to you; use the practice data only. Carry out the method
 yourself: the edits already in the toolkit (its `cases/`) are other people's results, and uploading one of them, or
 the parent unchanged, improves nothing. How the edit is found and chosen is the method's and the skill's, never your

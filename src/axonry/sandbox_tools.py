@@ -43,13 +43,15 @@ def check(a):
         raise SystemExit(f"{task_path} not found: copy the bundle's task.json here or pass --task")
     task, out = json.loads(task_path.read_text()), Path(a.out_dir)
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
-        if task.get("parent") and not (out / "parent").exists():   # uploads only reference the published parent
-            parent = Path(a.parent) if a.parent else task_path.parent / "parent" / "edit"
+        ref = json.loads((out / "edit.json").read_text()).get("parent") if (out / "edit.json").exists() else None
+        name = Path(ref).parent.as_posix() if ref else None      # "parent" or "champion": the start it stacks on
+        if name and not (out / name).exists():   # uploads only reference the published start
+            parent = Path(a.parent) if a.parent else task_path.parent / name / "edit"
             if not (parent / "edit.json").exists():
-                raise SystemExit(f"the parent edit is not at {parent}: copy the bundle's parent/edit/ there or "
+                raise SystemExit(f"the edit it stacks on is not at {parent}: copy the bundle's {name}/edit/ there or "
                                  "pass --parent")
             out = shutil.copytree(out, Path(tmp) / "out")
-            shutil.copytree(parent, out / "parent")
+            shutil.copytree(parent, out / name)
         res = admit(str(out), a.base_dir, task["base"])
     print(json.dumps(res, indent=1))
     return 0 if res["passed"] else 1
@@ -64,7 +66,8 @@ def main(argv=None):
     c = sub.add_parser("check")
     c.add_argument("out_dir")
     c.add_argument("--task", default="task.json")
-    c.add_argument("--parent", help="the parent edit directory (default: parent/edit beside task.json)")
+    c.add_argument("--parent", help="the edit it stacks on (default: parent/edit or champion/edit beside task.json, "
+                                    "as its edit.json names)")
     c.add_argument("--base-dir", default="/workspace/base")  # the verified base, read-only
     argv = list(sys.argv[1:] if argv is None else argv)
     alias = {"axonry-time": "time", "axonry-done": "done", "axonry-check": "check"}.get(prog)

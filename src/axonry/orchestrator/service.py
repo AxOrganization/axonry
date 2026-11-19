@@ -705,7 +705,7 @@ class Orchestrator:
                 self._reject(sid, code, str(e), "FAILED")
                 continue
             edit = Path(self.d.work_dir) / sid / "upload" / "edit"
-            parent_problem = self._check_parent_ref(edit, rec.get("parent"))
+            ref, parent_problem = self._built_on(edit, rec, (self.db.run(sid) or {}).get("task"))
             if parent_problem:
                 publisher.publish_dir(self.d.public, layout.submission_edit_prefix(sid), edit)
                 publisher.publish_admission(self.d.public, sid, {"passed": False, "violations": [parent_problem],
@@ -714,11 +714,14 @@ class Orchestrator:
                 self._publish_agent(sid, rec)
                 self._reject(sid, "REJECTED_RULES", parent_problem)
                 continue
+            if ref.get("sid") != rec.get("parent"):    # what the edit actually stacks on is its parent
+                self.db.update(sid, record_patch={"parent": ref.get("sid")})
+                rec = self.db.sub(sid)["record"]
             build_dir = Path(self.d.work_dir) / sid / "build"
             shutil.rmtree(build_dir, ignore_errors=True)
             shutil.copytree(edit, build_dir)
-            if rec.get("parent"):     # the published chain under parent/ (not uploaded: it is public already)
-                self._materialize_chain(rec["parent"], build_dir / "parent")
+            if ref:     # the published chain where the spec names it (not uploaded: it is public already)
+                self._materialize_chain(ref["sid"], build_dir / Path(ref["path"]).parent)
             ready = self._eval_ready()
             if not ready:
                 continue                       # eval_machine is renting or setting one up
@@ -741,17 +744,27 @@ class Orchestrator:
             self._recovered(s)
 
     @staticmethod
-    def _check_parent_ref(edit_dir: Path, parent_sid):
-        """With a parent, the spec says "parent": "parent/edit.json"; without one, it has no parent field."""
+    def _starts(rec, task) -> dict:
+        """What a run's edit may stack on, by the "parent" its edit.json names: the entry's parent, and the champion
+        when the run started (when another; both are in the run's bundle). No "parent": the base model."""
+        out = {"parent/edit.json": rec.get("parent")} if rec.get("parent") else {}
+        champ = ((task or {}).get("judge") or {}).get("champion")
+        if champ and champ != rec.get("parent"):
+            out["champion/edit.json"] = champ
+        return out
+
+    def _built_on(self, edit_dir: Path, rec, task):
+        """-> ({path, sid} of what the uploaded spec stacks on ({} for the base model), problem or None)."""
         try:
-            spec = json.loads((Path(edit_dir) / "edit.json").read_text())
+            path = json.loads((Path(edit_dir) / "edit.json").read_text()).get("parent")
         except ValueError as e:
-            return f"edit.json: {e}"
-        want = "parent/edit.json" if parent_sid else None
-        if spec.get("parent") != want:
-            return (f"edit.json parent must be {want!r} (entry.json parent {parent_sid})" if parent_sid
-                    else "edit.json names a parent but entry.json declares none")
-        return None
+            return {}, f"edit.json: {e}"
+        starts = self._starts(rec, task)
+        if path is None:
+            return {}, None
+        if path not in starts:
+            return {}, f"edit.json parent must be one of {sorted(starts)} or absent (the base model), not {path!r}"
+        return {"path": path, "sid": starts[path]}, None
 
     def _materialize_chain(self, sid, dest: Path):
         """Rebuild a published edit with its whole chain: submissions/<sid>/edit/ into dest, its parent's under
