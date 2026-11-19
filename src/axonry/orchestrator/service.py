@@ -453,7 +453,7 @@ class Orchestrator:
             if not is_eval(m["name"]) and s is None:
                 self.d.fleet.release(m["name"])
             elif s and s["status"] == "RUNNING" and gone.get(m["name"]) is True:
-                self._run_lost(s, "its machine vanished")
+                self._run_lost(s, "failed: its machine vanished")     # its host is not rented again
         held = sum(1 for m in self.d.fleet.active() if not is_eval(m["name"]))
         renting = True          # machines are rented in priority order: once one cannot be, none after it is
         for s in sorted(self.db.subs(status=("QUEUED",)), key=self.priority):
