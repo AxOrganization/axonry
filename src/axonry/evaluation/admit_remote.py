@@ -72,10 +72,10 @@ def static_checks(spec_dir, spec, rules, prefix=None, ndims=None):
     """Checks that need no weights (prefix/ndims: from the base's tensor index when available)."""
     out = []
     e = rules["edit"]
-    allowed = set(rules["submission"]["allowed_extensions"])
+    allowed = {f.removeprefix("edit/") for f in rules["upload"]["files"]}   # what an upload holds (and each parent)
     for p in Path(spec_dir).rglob("*"):
-        if p.is_file() and "__pycache__" not in p.parts and p.suffix not in allowed:
-            out.append(f"{p.relative_to(spec_dir)}: file type not allowed")
+        if p.is_file() and "__pycache__" not in p.parts and p.name not in allowed:
+            out.append(f"{p.relative_to(spec_dir)}: not an upload file ({', '.join(sorted(allowed))})")
     required = [f.removeprefix("edit/") for f in rules["upload"]["required"]]
     out += [f"missing {f}" for f in required if not (Path(spec_dir) / f).exists()]
     lim = edit_limits(rules)
