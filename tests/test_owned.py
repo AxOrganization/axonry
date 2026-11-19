@@ -5,6 +5,7 @@ import io
 import json
 import re
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -211,29 +212,50 @@ def test_a_published_agent_log_carries_none_of_the_runs_secrets(tmp_path):
     assert re.search(r"\[redacted\]", out)
 
 
-def test_benchmark_items_are_built_checked_and_packed(tmp_path):
-    """The orchestrator's pack for an owned evaluation host: the toolkit's own cache files, only when every benchmark
-    matches its frozen manifest (a stand-in toolkit here: no network)."""
+def test_benchmark_items_are_built_checked_and_packed(tmp_path, monkeypatch):
+    """The orchestrator's pack for an evaluation machine: the toolkit's files of the items built from their sources,
+    only when every benchmark matches its frozen manifest (a stand-in build here: no network)."""
     import tarfile as tar_mod
 
     from axonry.evaluation import benchdata
-    comp = tmp_path / "comp"
-    (comp / "wsp").mkdir(parents=True)
-    (comp / "wsp" / "__init__.py").write_text("")
-    (comp / "wsp" / "data.py").write_text(
-        "import os, pathlib\n"
-        "def manifest(task):\n"
-        "    d = pathlib.Path(os.environ['WSP_WORK']) / 'data'; d.mkdir(parents=True, exist_ok=True)\n"
-        "    (d / f'bench_{task.split(\":\")[1]}.jsonl').write_text('{}\\n')\n"
-        "    return {'sha256': 'm-' + task}\n")
+
+    def built(competition, spec, work):
+        d = Path(work) / "data"
+        d.mkdir(parents=True, exist_ok=True)
+        for b in spec:
+            (d / f"bench_{b['task'].split(':')[1]}.jsonl").write_text("{}\n")
+        return {b["key"]: "m-" + b["task"] for b in spec}
+    monkeypatch.setattr(benchdata, "_built", built)
     docs = [{"id": "amc23", "version": 1, "task": "bench:amc23", "items_manifest_sha256": "m-bench:amc23"}]
-    out = benchdata.build(comp, docs, tmp_path / "state")
+    out = benchdata.build(tmp_path / "comp", docs, tmp_path / "state")
     with tar_mod.open(out) as tf:
         assert tf.getnames() == ["data", "data/bench_amc23.jsonl"]
-    assert benchdata.build(comp, docs, tmp_path / "state") == out                 # built once
+    assert benchdata.build(tmp_path / "comp", docs, tmp_path / "state") == out    # built once
     bad = [{**docs[0], "items_manifest_sha256": "frozen-other"}]
     with pytest.raises(RuntimeError, match="amc23@1: items m-bench:amc2 != frozen frozen-other"):
-        benchdata.build(comp, bad, tmp_path / "state")
+        benchdata.build(tmp_path / "comp", bad, tmp_path / "state")
+
+
+def test_items_are_written_where_the_toolkit_reads_them(tmp_path, monkeypatch):
+    """write_items: each benchmark's rows from benchmarks/sources.py into the toolkit's data dir (stand-in toolkit)."""
+    import sys
+    import types
+
+    from axonry.evaluation import benchdata
+    written = {}
+    wsp = types.ModuleType("wsp")
+    data = types.SimpleNamespace(DATA=tmp_path, manifest=lambda task: {"sha256": "m-" + task})
+    common = types.SimpleNamespace(write_jsonl=lambda path, rows: written.setdefault(path, rows))
+    sources = types.SimpleNamespace(rows=lambda name: [{"id": name + "_0"}])
+    monkeypatch.setitem(sys.modules, "wsp", wsp)
+    monkeypatch.setitem(sys.modules, "wsp.data", data)
+    monkeypatch.setitem(sys.modules, "wsp.common", common)
+    monkeypatch.setitem(sys.modules, "axonry.benchmarks.sources", sources)
+    wsp.data, wsp.common = data, common
+    import axonry.benchmarks as pkg
+    monkeypatch.setattr(pkg, "sources", sources, raising=False)
+    got = benchdata.write_items([{"key": "amc23@1", "task": "bench:amc23"}])
+    assert got == {"amc23@1": "m-bench:amc23"} and written == {tmp_path / "bench_amc23.jsonl": [{"id": "amc23_0"}]}
 
 
 def test_a_file_the_host_already_holds_is_not_sent_again(tmp_path):
@@ -246,3 +268,29 @@ def test_a_file_the_host_already_holds_is_not_sent_again(tmp_path):
     p2, _ = pool(tmp_path, host, fake, clock)                     # a restarted orchestrator, same bundle
     assert p2.advance("s1") == "booting"
     assert [d for d in fake.copied if "/setup-" in d] == bundles  # the host holds it: no second upload
+
+
+def test_a_pack_in_an_older_layout_is_built_again(tmp_path, monkeypatch):
+    import tarfile as tar_mod
+
+    from axonry.evaluation import benchdata
+    docs = [{"id": "gsm8k500", "version": 1, "task": "bench:gsm8k500", "items_manifest_sha256": "m-bench:gsm8k500"}]
+    s = benchdata.spec(docs)
+    old = tmp_path / "state" / f"benchdata-{__import__('hashlib').sha256(json.dumps(s, sort_keys=True).encode()).hexdigest()[:12]}.tar"
+    old.parent.mkdir(parents=True)
+    src = tmp_path / "old" / "data"
+    src.mkdir(parents=True)
+    (src / "bench_gsm8k.jsonl").write_text("{}\n")                 # how the toolkit cached it before
+    with tar_mod.open(old, "w") as tf:
+        tf.add(src, arcname="data")
+
+    def built(competition, spec, work):
+        d = Path(work) / "data"
+        d.mkdir(parents=True, exist_ok=True)
+        for b in spec:
+            (d / f"bench_{b['task'].split(':')[1]}.jsonl").write_text("{}\n")
+        return {b["key"]: "m-" + b["task"] for b in spec}
+    monkeypatch.setattr(benchdata, "_built", built)
+    out = benchdata.build(tmp_path / "comp", docs, tmp_path / "state")
+    with tar_mod.open(out) as tf:
+        assert sorted(tf.getnames()) == ["data", "data/bench_gsm8k500.jsonl"]

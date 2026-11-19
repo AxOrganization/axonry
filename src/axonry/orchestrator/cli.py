@@ -15,7 +15,7 @@
   axonry-orchestrator registry pin-base BASE_ID --model-dir DIR
                                                      write registry/bases/<id>.json from the competition repo's profile
                                                      (hf repo + revision) and the sha256 of every file in DIR
-  axonry-orchestrator registry pin-bench KEY            items_manifest_sha256 from wsp.data.manifest (needs the toolkit)
+  axonry-orchestrator registry pin-bench KEY            items_manifest_sha256 of the items built now (benchmarks/sources.py)
   axonry-orchestrator registry pin-competition          competition commit + rules.json sha256 into the latest rules
   axonry-orchestrator publish-registry                  publish definitions to the public bucket
 Configuration: config/axonry.toml (see config/example.toml); secrets from the environment.
@@ -60,7 +60,7 @@ def fleet(cfg, db, rules):
             priv.put_file(key, path)
         return priv.s3.generate_presigned_url("get_object", Params={"Bucket": priv.bucket, "Key": key}, ExpiresIn=6 * 3600)
 
-    def items():    # an owned evaluation host's benchmark items, built once per set of benchmarks
+    def items():    # an evaluation machine's benchmark items, built once per set of benchmarks
         return benchdata.build(cfg.path_of("competition.local_path"), benches, cfg.path_of("state.work_dir"))
     key, image, proxy = cfg.require("machines.ssh_key"), cfg.require("machines.image"), cfg.get("machines.proxy_command")
     state = cfg.path_of("state.work_dir") / "machines"
@@ -73,7 +73,7 @@ def fleet(cfg, db, rules):
                  exclude_countries=cfg.get("vast.exclude_countries", ["CN"]),
                  verified_only=bool(cfg.get("vast.verified_only", False)), min_cuda=float(cfg.get("vast.min_cuda", 0)),
                  setup_minutes=int(cfg.get("vast.setup_minutes", 45)),
-                 proxy_command=proxy, bundle_url=bundle_url) if cfg.get("vast.enabled", False) else None
+                 proxy_command=proxy, bundle_url=bundle_url, items=items) if cfg.get("vast.enabled", False) else None
     return Machines(db, str(Path(key).expanduser()), owned, vast)
 
 
@@ -276,10 +276,10 @@ def pin_base(base_id, model_dir, comp_repo, root=registry.ROOT):
 
 
 def pin_bench(key, comp_repo, root=registry.ROOT):
+    from ..evaluation import benchdata  # noqa: PLC0415
     b = registry.load_benchmark(key, root)
-    out = subprocess.run([sys.executable, "-c", "import json, wsp.data as d; print(d.manifest(%r)['sha256'])"
-                          % b.doc["task"]], cwd=comp_repo, capture_output=True, text=True, check=True)
-    doc = {**b.doc, "items_manifest_sha256": out.stdout.strip()}
+    sha = benchdata.manifests(Path(comp_repo), [b.doc["task"]])[b.doc["task"]]
+    doc = {**b.doc, "items_manifest_sha256": sha}
     write_json(Path(root) / "benchmarks" / f"{key}.json", doc)
     return doc
 

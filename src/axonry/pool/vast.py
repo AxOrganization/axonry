@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .machine import ROOT, Machine, MachineError, give_to_agent, probe, scp, ssh
+from .machine import ROOT, Machine, MachineError, give_to_agent, is_eval, probe, scp, ssh
 
 UNREACHABLE_S = 10 * 60        # a container vast.ai reports running whose sshd never answers is given up after this
 
@@ -117,15 +117,16 @@ class Fleet:
     def __init__(self, api: VastAPI, db, *, image: str, disk_gb: int, ssh_key: str, bundle, state_dir: Path,
                  min_reliability=0.95, min_down_mbps=200, exclude_countries=("CN",), verified_only=False,
                  min_cuda=0.0, setup_minutes=45,
-                 proxy_command=None, clock=time.time, remote=None, bundle_url=None):
-        """bundle: () -> path of the setup bundle (built once). bundle_url: (path) -> a URL the machine downloads it
+                 proxy_command=None, clock=time.time, remote=None, bundle_url=None, items=None):
+        """bundle: () -> path of the setup bundle (built once). items: () -> path of the benchmark items (built once),
+        given to evaluation machines only. bundle_url: (path) -> a URL the machine downloads it
         from (else it is copied over ssh, which on a slow link holds up the caller). remote: (ssh, scp) for tests."""
         self.api, self.db, self.image, self.disk_gb, self.key = api, db, image, disk_gb, os.path.expanduser(ssh_key)
         self.bundle, self.dir, self.min_rel, self.min_down = bundle, Path(state_dir), min_reliability, min_down_mbps
         self.exclude, self.verified_only, self.min_cuda = tuple(exclude_countries), verified_only, min_cuda
         self.setup_s, self.proxy, self.clock = setup_minutes * 60, proxy_command, clock
         self.ssh, self.scp = remote or (ssh, scp)
-        self.bundle_url = bundle_url
+        self.bundle_url, self.items = bundle_url, items
         self._running_since = {}      # purpose -> when vast.ai first reported the container running
         self.dir.mkdir(parents=True, exist_ok=True)
         self._key_on_account = False
@@ -201,9 +202,13 @@ class Fleet:
                              f"/root/axonry-setup.tgz {sha} && ")
                 else:
                     self.scp(m, self.key, bundle, "/root/axonry-setup.tgz")
+                items = ""
+                if is_eval(purpose):   # the benchmark items: an evaluation machine's only (the toolkit has none)
+                    self.scp(m, self.key, Path(self.items()), "/root/axonry-items.tar")
+                    items = " /root/axonry-items.tar"
                 setup = (f"rm -rf /root/axonry-setup {ROOT}/FAILED && {fetch}mkdir /root/axonry-setup && "
                          "tar xzf /root/axonry-setup.tgz -C /root/axonry-setup && "
-                         f"AXONRY_GPU_CHECK=1 /root/axonry-setup/setup.sh {row['gpus']} "
+                         f"AXONRY_GPU_CHECK=1 /root/axonry-setup/setup.sh {row['gpus']}{items} "
                          f"|| {{ mkdir -p {ROOT}; touch {ROOT}/FAILED; }}")
                 self.ssh(m, self.key, f"(setsid nohup sh -c {shlex.quote(setup)} > /root/axonry-setup.log 2>&1 "
                                       "< /dev/null &)", timeout=300)

@@ -3,7 +3,7 @@ benchmark runs with the competition repo and the verified base. No miner code ru
 edit spec), applied by our admission code.
 
 Machine layout (pool/setup.sh, root /srv/axonry): models/<org>__<name>@<revision>/ (verified),
-repos/WeightSpaceProgramming/ (the pinned commit), wsp_work/ (WSP_WORK: wsp's benchmark data cache, filled on first use;
+repos/WeightSpaceProgramming/ (the pinned commit), wsp_work/ (WSP_WORK: the benchmark items, supplied at setup;
 its norm cache), eval/<model_id>/ (spec, built model, outputs; base -> the verified base). Jobs run in eval/<model_id>/.
 """
 import json

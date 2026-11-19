@@ -187,8 +187,11 @@ def punkt_tab(cache: Path) -> bytes:
     raise MachineError("nltk punkt_tab: no source served the pinned file")
 
 
+NOT_BUNDLED = ("axonry/benchmarks/sources.py",)   # where the benchmark items come from: the organizer's only
+
+
 def setup_bundle(project: Path, competition: Path, base_docs: list, bench_docs: list, dest: Path) -> Path:
-    """What setup.sh installs: our package (as the working tree has it), the competition repo at its checked-out
+    """What setup.sh installs: our package (as the working tree has it, without NOT_BUNDLED), the competition repo at its checked-out
     commit (the orchestrator refuses to start unless that is the rules' pin), the rules' base definitions, its
     benchmarks (key, task, frozen manifest: what an owned evaluation host checks its items against) and nltk's
     tokenizer data."""
@@ -198,7 +201,7 @@ def setup_bundle(project: Path, competition: Path, base_docs: list, bench_docs: 
     wsp = subprocess.run(["git", "-C", str(competition), "archive", "--format=tar", "HEAD"], capture_output=True,
                          check=True).stdout
     def plain(ti):   # no build time, owner or mode bits from this checkout: the same content gives the same bundle
-        if "__pycache__" in ti.name:
+        if "__pycache__" in ti.name or ti.name.endswith(NOT_BUNDLED):
             return None
         ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, 0, "", ""
         return ti

@@ -60,7 +60,7 @@ def fleet(tmp_path, clock):
     api, remote = FakeAPI(), FakeRemote()
     f = Fleet(api, DB(tmp_path / "db.sqlite"), image="img", disk_gb=100, ssh_key=str(tmp_path / "k"),
               bundle=lambda: tmp_path / "setup.tgz", state_dir=tmp_path / "m", setup_minutes=45,
-              clock=lambda: clock[0], remote=(remote.ssh, remote.scp))
+              clock=lambda: clock[0], remote=(remote.ssh, remote.scp), items=lambda: tmp_path / "items.tar")
     return f, api, remote
 
 
@@ -76,6 +76,7 @@ def test_a_machine_is_rented_set_up_and_released(tmp_path):
     assert f.advance("qwen35-0.8b-think") == "booting" and api.destroyed == []
     assert f.advance("qwen35-0.8b-think") == "setting_up"
     assert any("setup.sh 8" in c for c in remote.commands) and "scp /root/axonry-setup.tgz" in remote.commands
+    assert not any("axonry-items" in c for c in remote.commands)          # a run's machine never gets the items
     assert f.advance("qwen35-0.8b-think") == "setting_up"
     remote.ready = True
     assert f.advance("qwen35-0.8b-think") == "ready"
@@ -209,7 +210,7 @@ def test_sample_parses_gpus_status_line_and_done(monkeypatch):
 
     def remote(gpus, rest):
         def ssh(m, key, command, **k):
-            if command.startswith("timeout -k 2 10 nvidia-smi"):
+            if command.startswith("timeout -k 2 55 nvidia-smi"):
                 if isinstance(gpus, Exception):
                     raise gpus
                 return gpus
@@ -229,7 +230,7 @@ def test_sample_parses_gpus_status_line_and_done(monkeypatch):
     assert got["gpus"] == [{"util_pct": None, "mem_used_mib": 23314, "mem_total_mib": 24564}] and got["done"] is True
     monkeypatch.setattr(machine, "ssh", remote(MachineError("`nvidia-smi` timed out"), "done\n---\nstill here\n"))
     got = machine.sample(None, None)                     # a sick GPU hangs nvidia-smi: the done flag still comes
-    assert got["gpus"] == [] and got["done"] is True and got["note"] == "still here"
+    assert got["gpus"] is None and got["done"] is True and got["note"] == "still here"
 
 
 def test_offers_leave_out_hosts_vast_deverified():
@@ -274,3 +275,42 @@ def test_a_running_machine_whose_sshd_never_answers_is_given_up(tmp_path):
     assert f.advance("qwen35-0.8b-think") == "booting"
     clock[0] += 2 * 60                                          # 11 min running, never reachable: a broken host
     assert f.advance("qwen35-0.8b-think") == "failed" and api.destroyed == ["i1"]
+
+
+def test_an_unread_sample_keeps_the_last_reading():
+    from types import SimpleNamespace
+
+    from axonry.orchestrator.service import Orchestrator
+    last = {"gpus": [{"util_pct": 97, "mem_used_mib": 20000, "mem_total_mib": 24564}], "note": "screening",
+            "done": False, "at": 1.0}
+    reads = iter([{"gpus": None, "note": None, "done": False}, RuntimeError("timed out")])
+
+    def sample(sid):
+        r = next(reads)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    orch = SimpleNamespace(d=SimpleNamespace(fleet=SimpleNamespace(sample=sample)), now=lambda: 5.0)
+    got = Orchestrator._sample(orch, "s", last)                  # nvidia-smi unread: the GPUs stay as last read
+    assert got == {"gpus": last["gpus"], "note": None, "done": False, "at": 5.0}
+    got = Orchestrator._sample(orch, "s", last)                  # the machine unreachable: everything stays
+    assert got == {**last, "at": 5.0}
+
+
+def test_an_evaluation_machine_gets_the_benchmark_items(tmp_path):
+    clock = [1000.0]
+    f, api, remote = fleet(tmp_path, clock)
+    f.rent("eval", "RTX 4090", 8)
+    api.status["i1"] = {"actual_status": "running", "public_ipaddr": "198.51.100.4",
+                        "ports": {"22/tcp": [{"HostPort": "40022"}]}}
+    assert f.advance("eval") == "setting_up"
+    assert "scp /root/axonry-items.tar" in remote.commands
+    assert any("setup.sh 8 /root/axonry-items.tar" in c for c in remote.commands)
+
+
+def test_the_benchmark_sources_stay_out_of_the_setup_bundle():
+    from pathlib import Path
+
+    from axonry.pool.machine import NOT_BUNDLED
+    src = Path(__file__).resolve().parents[1] / "src"
+    assert all((src / rel).is_file() for rel in NOT_BUNDLED)         # a rename must not ship them silently

@@ -2,7 +2,8 @@
 # Machine setup (pool/), run as root in a fresh container of the pinned vLLM image (a vast instance, or an owned
 # host's container: pool/host.sh): the competition toolkit's runtime and ours, the competition repo, the verified
 # base(s), and the unprivileged `agent` user the run's agent logs in as. Ends with /srv/axonry/READY, or
-# /srv/axonry/FAILED. Argument: the GPUs the machine must have.
+# /srv/axonry/FAILED. Arguments: the GPUs the machine must have; on an evaluation machine, the benchmark items' tar
+# (evaluation/benchdata.py: the toolkit holds no benchmark), unpacked into its WSP_WORK and checked offline.
 #
 # Layout: /srv/axonry/models/<org>__<name>@<rev>/ (verified), /srv/axonry/repos/WeightSpaceProgramming/,
 # /srv/axonry/wsp_work/ (evaluation: benchmark data cache), /srv/axonry/eval/ (evaluation jobs). For the agent:
@@ -74,5 +75,10 @@ S
 sshd -t
 pkill -HUP -x sshd || true
 
-python3 -c "import torch; n = torch.cuda.device_count(); assert n == $1, n; [torch.ones(1, device=f'cuda:{i}') for i in range(n)]"
+if [ -n "${2:-}" ]; then
+  tar xf "$2" -C $R/wsp_work
+  HF_HUB_OFFLINE=1 PYTHONPATH=$R/repos/WeightSpaceProgramming WSP_WORK=$R/wsp_work python3 -m axonry.evaluation.benchdata \
+    "$B/benchmarks.json"
+fi
+
 date +%s > $R/READY
