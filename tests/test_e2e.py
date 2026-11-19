@@ -204,7 +204,7 @@ class FakeRunner:
     """The 'agent': on kickoff it uploads its plan's edit spec through the staging protocol."""
 
     def __init__(self, private, tmp):
-        self.private, self.tmp, self.kicked, self.saw_parent, self.methods = private, tmp, [], {}, {}
+        self.private, self.tmp, self.kicked, self.saw_parent, self.methods, self.bundles = private, tmp, [], {}, {}, {}
 
     def keep_alive(self):
         pass
@@ -229,6 +229,8 @@ class FakeRunner:
         n = method.split()[-1]
         self.methods[h.sid] = method
         self.saw_parent[h.sid] = bool(parent_files)
+        with tarfile.open(bundle) as tf:
+            self.bundles[h.sid] = (tf.getnames(), tf.extractfile("BRIEF.md").read().decode())
         out = self.tmp / h.sid
         out.mkdir(parents=True, exist_ok=True)
         (out / "edit.json").write_text(json.dumps(PLANS[n]["spec"]))
@@ -688,6 +690,8 @@ def test_stacking_on_a_published_parent(tmp_path):
     run_until_quiet(orch, clock, rounds=6)
     se = "0000000110-0001"
     assert orch.d.runner.saw_parent[se]                       # the parent's edit was in the bundle
+    names, text = orch.d.runner.bundles[se]                   # the champion is its parent: told, not shipped twice
+    assert not any(n.startswith("champion/") for n in names) and f"Against the champion `{sa}`," in text
     assert orch.db.sub(se)["record"]["parent"] == sa
     assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION"   # judged against the champion (its parent)
     assert pub.get(layout.submission_edit_prefix(se) + "edit.json")
@@ -1566,3 +1570,20 @@ def test_a_refusal_no_deletion_can_fix_ends_the_entry_and_closes_its_pr(tmp_path
     s = orch.db.sub("0000000101-0001")
     assert (s["status"], s["reason_code"]) == ("REJECTED", "REVIEW_CHANGES") and "not fixable" in s["reason"]
     assert gh.prs[n]["state"] == "closed"
+
+
+def test_a_run_is_told_the_champion_it_must_beat_and_gets_its_edit(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    run_until_quiet(orch, clock, rounds=6)
+    sa = "0000000101-0001"
+    assert orch.db.sub(sa)["reason_code"] == "NEW_CHAMPION"
+    pay(orch, chain, "B", 110, 1)                             # from the base model, not from the champion
+    chain.head = 110
+    orch.intake()
+    run_until_quiet(orch, clock, rounds=2)
+    names, text = orch.d.runner.bundles["0000000110-0001"]
+    assert "champion/edit/edit.json" in names and not any(n.startswith("parent/") for n in names)
+    assert f"Against the champion `{sa}`," in text and "clearly better on at least 2" in text

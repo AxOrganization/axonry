@@ -39,6 +39,20 @@ ops, measured against the parent model.
 """
 
 
+def _judged(task) -> str:
+    j = task.get("judge")
+    if not j:
+        return ""
+    if j["champion"]:
+        ref = f"the champion `{j['champion']}`"
+    else:
+        ref = "the base model (no champion yet)"
+    return f"""
+## How the edit is judged
+Against {ref}, on the evaluation's benchmarks (closed to you): the edit must be worse on none of them (beyond their noise) and clearly better on at least {j['n_win']}.
+"""
+
+
 def _fmt_ts(ts):
     return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ts))
 
@@ -63,7 +77,7 @@ toolkit's weight-edit skill: `.claude/skills/weight-edit/` (Claude-style agents)
 You do not upload weights. Benchmarks are not available to you; use the practice data only. Carry out the method
 yourself: the edits already in the toolkit (its `cases/`) are other people's results, and uploading one of them, or
 the parent unchanged, improves nothing.
-{_parent(task)}
+{_parent(task)}{_judged(task)}
 ## Time
 - Start: {_fmt_ts(run['start'])}
 - **Deadline: {_fmt_ts(run['deadline'])}** ({(run['deadline'] - run['start']) // 3600} h). Anything uploaded later is ignored.

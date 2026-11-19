@@ -521,8 +521,9 @@ class Orchestrator:
                                                 "host_key": m.jump.host_key()}},
                 "r2": creds.as_dict(),
                 "limits": brief.limits_from(self.d.comp_rules),
-                "parent": ({"sid": rec["parent"], "path": "parent/edit/edit.json"} if rec.get("parent") else None)}
-        bundle = self._bundle(task, blobs, rec.get("parent"))   # the only place the run's secrets go
+                "parent": ({"sid": rec["parent"], "path": "parent/edit/edit.json"} if rec.get("parent") else None),
+                "judge": self._judge_view(rules, rec)}
+        bundle = self._bundle(task, blobs)   # the only place the run's secrets go
         busy = [RunHandle(**self.db.run(r["sid"])["handle"]) for r in self.db.subs(status=("RUNNING",))]
         h = self.d.runner.prepare(sid, s["hotkey"], busy)
         self.d.runner.kickoff(h, brief.kickoff_message(bundle.name), bundle)
@@ -530,6 +531,11 @@ class Orchestrator:
         self.db.update(sid, "RUNNING", record_patch={
             "timeline": {**rec["timeline"], "kickoff": start, "deadline": deadline},
             "sandbox": {"resources": resources}})
+
+    def _judge_view(self, rules, rec) -> dict:
+        """What the run is judged against: its rules' wins needed and the champion when it starts (None: the base)."""
+        champ = self.db.champion(rec["base"])
+        return {"n_win": rules["judge"]["n_win"], "champion": champ["sid"] if champ else None}
 
     def _parent_files(self, parent_sid) -> dict:
         """{relative path: bytes} of a published submission's edit/ directory (the stacking parent)."""
@@ -539,7 +545,7 @@ class Orchestrator:
     def _bundle_path(self, sid) -> Path:
         return Path(self.d.work_dir) / sid / f"axonry-task-{sid}.tar.gz"
 
-    def _bundle(self, task, blobs, parent_sid=None) -> Path:
+    def _bundle(self, task, blobs) -> Path:
         d = Path(self.d.work_dir) / task["sid"]
         d.mkdir(parents=True, exist_ok=True)
         path = self._bundle_path(task["sid"])
@@ -554,13 +560,15 @@ class Orchestrator:
                 add(f"ssh/{rel}", data)
             for rel, data in sorted(blobs.items()):
                 add(f"submission/{rel}", data)
-            if parent_sid:     # the full published chain, nested parent/ directories included
-                chain = d / "parent_chain"
-                shutil.rmtree(chain, ignore_errors=True)
-                self._materialize_chain(parent_sid, chain)
-                for p in sorted(chain.rglob("*")):
-                    if p.is_file():
-                        add(f"parent/edit/{p.relative_to(chain).as_posix()}", p.read_bytes())
+            parent, champion = (task["parent"] or {}).get("sid"), task["judge"]["champion"]
+            for name, sid in (("parent", parent), ("champion", champion if champion != parent else None)):
+                if sid:        # the full published chain, nested parent/ directories included
+                    chain = d / f"{name}_chain"
+                    shutil.rmtree(chain, ignore_errors=True)
+                    self._materialize_chain(sid, chain)
+                    for p in sorted(chain.rglob("*")):
+                        if p.is_file():
+                            add(f"{name}/edit/{p.relative_to(chain).as_posix()}", p.read_bytes())
         return path
 
     # ------------------------------------------------------------------------------------------- supervise
