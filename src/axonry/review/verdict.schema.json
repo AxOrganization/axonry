@@ -11,7 +11,7 @@
   "properties": {
     "read": {
       "type": "boolean",
-      "description": "true only if you could read every file of submission/ and earlier/"
+      "description": "true when you read every file of the workspace (another way after a tool failed counts); false only if a file stayed unread"
     },
     "substantive": {
       "$ref": "#/$defs/check"

@@ -33,12 +33,15 @@ def earlier_than(item, contents):
 
 
 def prepare(gh, item, contents, rules, work: Path) -> Path:
-    """workspace/ submission/ (the item at its listed commit) + earlier/ (+ INDEX.md); -> its path."""
+    """workspace/ submission/ (the item at its listed commit) + earlier/ (+ INDEX.md) + original/ (a reduced item: the
+    content as first revealed, to check the deletions against); -> its path."""
     ws = (work / f"pr{item['pr']}-{item['commit'][:12]}").resolve()   # absolute: the model runs inside it
     blobs = gh.dir_blobs(item["commit"], item["directory"])
     if content_digest_of_blobs(blobs) != item["content_digest"]:
         raise ValueError("the listed commit does not hold the committed content (status.json is stale)")
     write_dir(ws / "submission", blobs)
+    if item.get("revealed"):
+        write_dir(ws / "original", gh.dir_blobs(item["revealed"]["commit"], item["revealed"]["directory"]))
     index = ["# Earlier submissions of other miners (earliest first)", ""]
     for c in earlier_than(item, contents):
         name = f"{c['priority'][0]}-{c['priority'][1]}-pr{c['pr']}"
@@ -54,8 +57,8 @@ def prepare(gh, item, contents, rules, work: Path) -> Path:
     benches = ", ".join(registry.load_benchmark(k).doc["id"] for k in rules.benchmark_keys())
     (ws / "PROMPT.md").write_text(POLICY.read_text() + f"\nThe evaluation benchmarks: {benches}.\n\n"
                                   "Answer with the JSON object the output schema describes. Set `read` to true when you "
-                                  "read every file (another way after a tool failed counts); false only if a file stayed "
-                                  "unread.\n")
+                                  "read every file of the workspace (another way after a tool failed counts); false only "
+                                  "if a file stayed unread.\n")
     return ws
 
 

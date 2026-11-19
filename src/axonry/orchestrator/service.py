@@ -267,9 +267,14 @@ class Orchestrator:
         """The digest of the content the submission carries now: the committed one, or a reduction of it."""
         return s["record"].get("content") or s["content_digest"]
 
+    @staticmethod
+    def _revealed(s) -> dict | None:
+        """Where the committed content was first carried: {commit, directory} (what a reduction is checked against)."""
+        return s["record"].get("revealed") or (     # entries carried before reductions existed: their last head
+            s["head_sha"] and {"commit": s["head_sha"], "directory": s["record"]["pr"]["directory"]}) or None
+
     def _reduces(self, s, p) -> bool:
-        rev = s["record"].get("revealed") or (     # entries carried before reductions existed: their last head
-            s["head_sha"] and {"commit": s["head_sha"], "directory": s["record"]["pr"]["directory"]})
+        rev = self._revealed(s)
         if not rev or p.digest is None:
             return False
         gh = self.d.github
@@ -1026,7 +1031,8 @@ class Orchestrator:
                     "reason_code": None if starting else s["reason_code"], "reason": None if starting else s["reason"],
                     "commit": s["locked_commit"] or s["head_sha"], "content_digest": self._content(s),
                     "directory": pr.get("directory"),
-                    "priority": [s["prio_block"], s["prio_index"]]}
+                    "priority": [s["prio_block"], s["prio_index"]],
+                    **({"revealed": self._revealed(s)} if self._content(s) != s["content_digest"] else {})}
         by_prio = sorted(self.db.subs(), key=self.priority)
         rules = self._in_force(self.d.chain.finalized_head())
         if rules is None:

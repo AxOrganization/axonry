@@ -30,11 +30,12 @@ its weight to the best model. The champion, the queue, every run and every resul
    first commitment counts, and its chain position is the entry's **priority**: runs and decisions follow it. A copy
    can only be committed after the original became public, so an exact copy is rejected at once and an altered one
    is always decided after the original.
-3. A reviewer checks, in priority order, that the method is a real weight-editing method, that everything in it
-   serves an honest edit (no outside weights, benchmark overfitting or attacks), and that it differs in substance
-   from every method of other miners committed before it and still in progress (a finished entry's method is free
-   to build on). The verdict is posted on the pull request; once approved, the pull request is locked at that
-   commit and the entry is queued. A finished entry gets its result on its pull request, which is then closed.
+3. A reviewer checks, in priority order, that the method contributes an idea the agent can carry out and test,
+   that the edit can only come out of the run (nothing from or about the evaluation benchmarks, no weights brought
+   in, no attacks), and that it differs in substance from every method of other miners committed before it and
+   still in progress (a finished entry's method is free to build on). The verdict is posted on the pull request: if
+   it asks for changes, only deletions are possible and the rest is reviewed again; once approved, the pull request
+   is locked at that commit and the entry is queued. A finished entry gets its result on its pull request, which is then closed.
 4. When its turn comes, an AI agent carries out the method on its own GPU machine (set up for that run alone,
    destroyed after it), until the deadline or until it says it is done. It delivers an **edit**: a small,
    declarative change to the base weights. Fitting the benchmarks and outside weights are forbidden; the agent's
@@ -97,8 +98,9 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
    `submissions/<your hotkey>/<entry>/`. Follow the repository's README for its contents and limits, and use its
    toolkit to try your idea first. The method contributes an idea for improving the model, grounded in your own
    exploration: the behavior to change, why you think the model does it, and how the agent finds and tests the edit.
-   Findings of your exploration (measurements, arrays, a first candidate) may support it; an edit handed over to
-   apply, with no cause and no derivation by which it could be reproduced, is refused in review.
+   Findings of your exploration on practice data (measurements, a first candidate) may support it; an edit handed
+   over to apply, with no cause and no derivation by which it could be reproduced, is refused in review, and so is
+   anything from or about the evaluation benchmarks.
 3. **Fund the account of your hotkey's coldkey.**
    ```
    axonry-miner price                                      # the most a run costs, in USD and alpha now

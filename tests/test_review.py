@@ -64,6 +64,17 @@ def test_compares_with_earlier_content_of_other_hotkeys_only(tmp_path):
     assert (ws / "earlier" / "100-1-pr3" / "METHOD.md").read_bytes() == b"an earlier method"
     assert "100-1-pr3" in (ws / "earlier" / "INDEX.md").read_text()
     assert "math500" in (ws / "PROMPT.md").read_text()
+    assert not (ws / "original").exists()                       # not a reduction
+
+
+def test_a_reduction_is_reviewed_beside_the_content_first_revealed(tmp_path):
+    gh = GH()
+    gh.trees["c3"] = {"entry.json": MINE["entry.json"], "METHOD.md": b"my method\nwith a part to delete\n"}
+    item = {**ITEM, "revealed": {"commit": "c3", "directory": "submissions/B/e/"}}
+    ws = auto.prepare(gh, item, CONTENTS, rules(), tmp_path)
+    assert (ws / "submission" / "METHOD.md").read_bytes() == b"my method"
+    assert (ws / "original" / "METHOD.md").read_bytes() == b"my method\nwith a part to delete\n"
+    assert "`original/`" in (ws / "PROMPT.md").read_text()
 
 
 def test_approves_only_when_all_checks_pass(tmp_path):
