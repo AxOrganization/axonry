@@ -1228,8 +1228,8 @@ class Orchestrator:
         def row(s):
             pr = s["record"].get("pr") or {}
             starting = s["status"] == "QUEUED" and self.d.fleet.get(s["sid"]) is not None   # its machine sets up
-            return {"sid": s["sid"], "hotkey": s["hotkey"], "pr": s["pr_number"],
-                    "title": pr.get("title"),
+            return {"sid": s["sid"], "hotkey": s["hotkey"], "github_id": s["record"].get("github_id"),
+                    "pr": s["pr_number"], "title": pr.get("title"),
                     "status": "STARTING" if starting else s["status"],
                     "reason_code": None if starting else s["reason_code"], "reason": None if starting else s["reason"],
                     "commit": s["locked_commit"] or s["head_sha"], "content_digest": self._content(s),
@@ -1331,7 +1331,8 @@ class Orchestrator:
         """Every submission still in progress whose content a PR has made public (its PR is open), in priority order:
         a reviewer compares an item with every earlier one of these (originality, review/PROTOCOL.md). A finished
         entry's method is free to build on."""
-        return [{"sid": s["sid"], "hotkey": s["hotkey"], "pr": s["pr_number"], "status": s["status"],
+        return [{"sid": s["sid"], "hotkey": s["hotkey"], "github_id": s["record"].get("github_id"),
+                 "pr": s["pr_number"], "status": s["status"],
                  "commit": s["locked_commit"] or s["head_sha"],
                  "directory": (s["record"].get("pr") or {}).get("directory"),
                  "priority": [s["prio_block"], s["prio_index"]]}

@@ -35,13 +35,13 @@ class Reader:
         return self.doc
 
 
-ITEM = {"pr": 7, "sid": "0000000200-0001", "hotkey": "B", "commit": "c2", "directory": "submissions/B/e/",
-        "content_digest": content_digest_of_blobs(MINE), "priority": [200, 1]}
-CONTENTS = [{"sid": "0000000100-0001", "hotkey": "A", "pr": 3, "status": "QUEUED", "commit": "c1",
+ITEM = {"pr": 7, "sid": "0000000200-0001", "hotkey": "B", "github_id": 2, "commit": "c2",
+        "directory": "submissions/B/e/", "content_digest": content_digest_of_blobs(MINE), "priority": [200, 1]}
+CONTENTS = [{"sid": "0000000100-0001", "hotkey": "A", "github_id": 1, "pr": 3, "status": "QUEUED", "commit": "c1",
              "directory": "submissions/A/e/", "priority": [100, 1]},
-            {"sid": None, "hotkey": "B", "pr": 6, "status": "WAITING", "commit": "c0",       # own earlier version
-             "directory": "submissions/B/e/", "priority": [150, 1]},
-            {"sid": "0000000300-0001", "hotkey": "C", "pr": 9, "status": "REVIEW", "commit": "c1",  # later
+            {"sid": "0000000150-0001", "hotkey": "B2", "github_id": 2, "pr": 6, "status": "WAITING", "commit": "c0",
+             "directory": "submissions/B2/e/", "priority": [150, 1]},                    # its own, another hotkey
+            {"sid": "0000000300-0001", "hotkey": "C", "github_id": 3, "pr": 9, "status": "REVIEW", "commit": "c1",  # later
              "directory": "submissions/C/e/", "priority": [300, 1]},
             {**ITEM, "status": "REVIEW"}]
 
@@ -57,7 +57,7 @@ def rules():
     return latest_rules()
 
 
-def test_compares_with_earlier_content_of_other_hotkeys_only(tmp_path):
+def test_compares_with_earlier_content_of_other_github_accounts_only(tmp_path):
     assert [c["pr"] for c in auto.earlier_than(ITEM, CONTENTS)] == [3]
     ws = auto.prepare(GH(), ITEM, CONTENTS, rules(), tmp_path)
     assert (ws / "submission" / "METHOD.md").read_bytes() == b"my method"
@@ -169,3 +169,4 @@ def test_an_idle_reviewer_summarizes_a_content_without_an_idea(tmp_path):
         auto.run(Reader({"review": [], "contents": CONTENTS}), gh, rules(), tmp_path / "b", "false", once=True)
     assert json.loads((tmp_path / "b" / "attempts.json").read_text())["idea:" + auto.key(CONTENTS[0])] == \
         auto.MAX_ATTEMPTS
+

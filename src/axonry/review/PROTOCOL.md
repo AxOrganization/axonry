@@ -46,8 +46,9 @@ content yet:
 1. Fetch the directory at the listed `commit`; its digest must equal the listed `content_digest` (else skip: the
    status is stale).
 2. Build a workspace: `submission/` and `earlier/` = every entry of `status.json` `contents` with an earlier
-   priority (every submission still in progress whose content a PR has made public; a finished entry's PR is
-   closed, and its method is free to build on), listed in `earlier/INDEX.md` with each one's idea.
+   priority and another GitHub account (every submission still in progress whose content a PR has made public; a
+   finished entry's PR is closed, and its method is free to build on, as is a miner's own), listed in
+   `earlier/INDEX.md` with each one's idea.
 3. Run the model on `POLICY.md` in a read-only sandbox without network and without any token in its environment.
    It answers three checks - **substantive**, **conduct**, **original** - in `verdict.schema.json`, and states the
    submission's idea, which later reviews compare with (a content in progress without one, e.g. reviewed by a

@@ -31,9 +31,10 @@ MAX_ATTEMPTS = 3
 
 
 def earlier_than(item, contents):
-    """The content the item must differ from: every earlier commitment of another hotkey (any status)."""
+    """The content the item must differ from: every earlier commitment (any status) of another GitHub account (the
+    id committed with it; a hotkey commits once, a miner may use several): a miner may build on its own earlier work."""
     p = tuple(item["priority"])
-    return [c for c in contents if tuple(c["priority"]) < p and c["hotkey"] != item["hotkey"]]
+    return [c for c in contents if tuple(c["priority"]) < p and c["github_id"] != item["github_id"]]
 
 
 def key(c) -> str:

@@ -7,9 +7,10 @@ of a small language model. The model is then scored on public benchmarks against
 Your workspace:
 
 - `submission/` - the submission under review, as it stands (the committed content, or a reduction of it).
-- `earlier/` - every submission of **other** miners committed before it and still in progress (its PR open;
-  `earlier/INDEX.md` lists them in order: earliest first, with status and each one's idea as summarized when it was
-  reviewed). Finished entries are not there: building on them is free. It may be empty.
+- `earlier/` - every submission of **other** miners (another GitHub account) committed before it and still
+  in progress (its PR open; `earlier/INDEX.md` lists them in order: earliest first, with status and each one's idea
+  as summarized when it was reviewed). Finished entries and the miner's own are not there: building on them is free.
+  It may be empty.
 - `original/` - only when the submission is a reduction: after a review asked for changes, a miner may only delete
   (files, words or punctuation) and have the rest reviewed again; `original/` is the content as first revealed. A
   reduction is reviewed in full, as any submission: every check applies to it as it stands, and `original/` only adds
