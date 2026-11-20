@@ -214,7 +214,6 @@ class FakeRunner:
     def __init__(self, private, tmp):
         self.private, self.tmp, self.kicked, self.saw_parent, self.methods, self.bundles = private, tmp, [], {}, {}, {}
         self.start_on = {}                               # sid -> "champion": the agent builds on the champion
-        self.legacy = {}                                 # sid -> the parent an agent before rules v7 wrote (None: none)
 
     def keep_alive(self):
         pass
@@ -251,8 +250,6 @@ class FakeRunner:
         spec = {**PLANS[n]["spec"], "parent": ref}
         if self.start_on.get(h.sid) == "omit":                      # an agent that leaves the parent out
             spec.pop("parent")
-        if h.sid in self.legacy:                                    # a run started before rules v7
-            spec = {**PLANS[n]["spec"], **({"parent": self.legacy[h.sid]} if self.legacy[h.sid] else {})}
         (out / "edit.json").write_text(json.dumps(spec))
         man = make_manifest(out)
         for f in man["files"]:
@@ -1862,41 +1859,5 @@ def test_an_upload_without_a_task_record_is_refused_with_a_reason(tmp_path):
     orch, *_ = make(tmp_path)
     (tmp_path / "up").mkdir()
     (tmp_path / "up" / "edit.json").write_text(json.dumps({"base": BASE, "parent": "x", "ops": []}))
-    assert orch._built_on(tmp_path / "up", None) == ({}, "no task record of this run")
+    assert orch._built_on(tmp_path / "up", None) == ({}, "no task record of this run lists its starts")
 
-
-def test_a_run_started_before_rules_v7_is_collected_by_the_forms_its_bundle_had(tmp_path):
-    """TEMPORARY (removed once no such run is left): its task lists no starts; its bundle held parent/edit/ and
-    champion/edit/, and its agent names them by path (or names nothing: the base)."""
-    orch, chain, clock, pub = make(tmp_path)
-    pay(orch, chain, "A", 101, 1)
-    chain.head = 101
-    open_rules(orch, 101)
-    run_until_quiet(orch, clock, rounds=6)
-    sa = "0000000101-0001"
-    assert orch.db.sub(sa)["reason_code"] == "NEW_CHAMPION"
-    save = orch.db.save_run
-
-    def as_before_v7(sid, task=None, **kw):                 # the task record a run started before v7 has
-        if task and "starts" in task:
-            parent = orch.db.sub(sid)["record"].get("parent")
-            task = {**{k: v for k, v in task.items() if k not in ("starts", "base_name")},
-                    "parent": {"sid": parent, "path": "parent/edit/edit.json"} if parent else None}
-        return save(sid, task=task, **kw)
-    orch.db.save_run = as_before_v7
-    se, sf, sg, sh = "0000000110-0001", "0000000111-0001", "0000000112-0001", "0000000113-0001"
-    orch.d.runner.legacy = {se: "parent/edit.json", sf: "champion/edit.json", sg: None, sh: f"{sa}/edit.json"}
-    pay(orch, chain, "E", 110, 1, parent=sa)
-    pay(orch, chain, "B", 111, 1)
-    pay(orch, chain, "C", 112, 1)
-    pay(orch, chain, "D", 113, 1)
-    chain.head = 113
-    orch.intake()
-    run_until_quiet(orch, clock, rounds=8)
-    assert "starts" not in orch.db.run(se)["task"]
-    assert orch.db.sub(se)["record"]["parent"] == sa and orch.db.sub(se)["status"] == "PUBLISHED"
-    assert orch.db.sub(sf)["record"]["parent"] == sa                                  # the champion: built on it
-    assert "relative change" in orch.db.sub(sf)["reason"]                             # (B's plan exceeds the limits)
-    assert orch.db.sub(sg)["record"].get("parent") is None and orch.db.sub(sg)["status"] == "PUBLISHED"   # base
-    assert orch.db.sub(sh)["reason_code"] == "REJECTED_RULES"                                       # not its form
-    assert "'champion/edit.json'" in orch.db.sub(sh)["reason"]

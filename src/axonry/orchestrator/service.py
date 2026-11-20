@@ -761,7 +761,7 @@ class Orchestrator:
             shutil.rmtree(build_dir, ignore_errors=True)
             shutil.copytree(edit, build_dir)
             if ref:     # the published chain where the spec names it (not uploaded: it is public already)
-                self._materialize_chain(ref["sid"], build_dir / ref["dir"])
+                self._materialize_chain(ref["sid"], build_dir / ref["sid"] / "edit")
             ready = self._eval_ready()
             if not ready:
                 continue                       # eval_machine is renting or setting one up
@@ -788,28 +788,18 @@ class Orchestrator:
     def _built_on(edit_dir: Path, task):
         """What the uploaded spec stacks on, by the "parent" its edit.json always names: the sid of one of the run's
         starts (task.json -> starts; in its bundle as <sid>/edit/), or the base by its full name; nothing else.
-        -> ({"sid", "dir": where its chain goes beside the spec} ({} for the base model), problem or None)."""
-        if not task:
-            return {}, "no task record of this run"
+        -> ({"sid"} ({} for the base model), problem or None)."""
+        if not task or "starts" not in task:
+            return {}, "no task record of this run lists its starts"
         try:
             ref = json.loads((Path(edit_dir) / "edit.json").read_text()).get("parent")
         except ValueError as e:
             return {}, f"edit.json: {e}"
-        if "starts" not in task:        # TEMPORARY: a run started before rules v7 (parent/edit/, champion/edit/ in
-            parent = (task.get("parent") or {}).get("sid")      # its bundle); removed once none is left
-            champ = (task.get("judge") or {}).get("champion")
-            old = {**({"parent/edit.json": parent} if parent else {}),
-                   **({"champion/edit.json": champ} if champ and champ != parent else {})}
-            if ref is None:
-                return {}, None
-            if ref in old:
-                return {"sid": old[ref], "dir": Path(ref).parent.as_posix()}, None
-            return {}, f"edit.json parent must be one of {sorted(old)} or absent (the base model), not {ref!r}"
         starts = [s["sid"] for s in task["starts"]]
         if ref == task["base_name"]:
             return {}, None
         if ref in starts:
-            return {"sid": ref, "dir": f"{ref}/edit"}, None
+            return {"sid": ref}, None
         named = " or ".join([*(repr(s) for s in starts), repr(task["base_name"])])
         return {}, f"edit.json parent must be {named}, not {ref!r}"
 
