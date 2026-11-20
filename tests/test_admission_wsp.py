@@ -89,11 +89,13 @@ def test_stacked_edit_limits_only_new_layer(tmp_path, base):
 def test_axonry_check_builds_a_stacked_upload_on_the_bundles_parent(tmp_path, base):
     from axonry import sandbox_tools
     parent = spec_dir(tmp_path, "bundle_parent", [ablate(1, 0.1, cols=[0, 1])])
-    (tmp_path / "task.json").write_text(json.dumps({"base": BASE_ID, "parent": {"sid": "0000000000-0000"}}))
-    (tmp_path / "parent").mkdir()
-    parent.rename(tmp_path / "parent" / "edit")
-    up = spec_dir(tmp_path, "upload", [ablate(2, 0.1, cols=[0, 1])], parent="parent/edit.json")
+    sid = "0000000000-0000"
+    (tmp_path / "task.json").write_text(json.dumps({"base": BASE_ID, "starts": [{"sid": sid, "role": "parent"}],
+                                                    "base_name": "unused@0"}))
+    (tmp_path / sid).mkdir()
+    parent.rename(tmp_path / sid / "edit")                  # as the bundle holds it
+    up = spec_dir(tmp_path, "upload", [ablate(2, 0.1, cols=[0, 1])], parent=sid)
     args = ["check", str(up), "--task", str(tmp_path / "task.json"), "--base-dir", str(base)]
     assert sandbox_tools.main(args) == 0
-    assert not (up / "parent").exists()                     # the upload itself is left as it is
+    assert not (up / sid).exists()                          # the upload itself is left as it is
 

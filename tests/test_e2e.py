@@ -235,7 +235,7 @@ class FakeRunner:
             method = tf.extractfile("submission/METHOD.md").read().decode()
             starts = {s["role"]: s["sid"] for s in task["starts"]}
             parent_files = {m.name for m in tf.getmembers()
-                            if task.get("parent") and m.name.startswith(f"{task['parent']['sid']}/edit/")}
+                            if "parent" in starts and m.name.startswith(f"{starts['parent']}/edit/")}
         n = method.split()[-1]
         self.methods[h.sid] = method
         self.saw_parent[h.sid] = bool(parent_files)
@@ -1833,4 +1833,4 @@ def test_an_upload_without_a_task_record_is_refused_with_a_reason(tmp_path):
     orch, *_ = make(tmp_path)
     (tmp_path / "up").mkdir()
     (tmp_path / "up" / "edit.json").write_text(json.dumps({"base": BASE, "parent": "x", "ops": []}))
-    assert orch._built_on(tmp_path / "up", {}, None) == ({}, "no task record of this run lists its starts")
+    assert orch._built_on(tmp_path / "up", None) == ({}, "no task record of this run lists its starts")

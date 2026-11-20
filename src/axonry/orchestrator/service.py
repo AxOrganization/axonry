@@ -555,8 +555,6 @@ class Orchestrator:
                                                 "host_key": m.jump.host_key()}},
                 "r2": creds.as_dict(),
                 "limits": brief.limits_from(self.d.comp_rules),
-                "parent": ({"sid": rec["parent"], "path": f"{rec['parent']}/edit/edit.json"} if rec.get("parent")
-                           else None),
                 "judge": self._judge_view(rules, rec),
                 "base_name": registry.base_name(registry.load_base(rec["base"], self.d.registry_root))}
         champ = task["judge"]["champion"]
@@ -747,7 +745,7 @@ class Orchestrator:
                 self._reject(sid, code, str(e), "FAILED")
                 continue
             edit = Path(self.d.work_dir) / sid / "upload" / "edit"
-            ref, parent_problem = self._built_on(edit, rec, (self.db.run(sid) or {}).get("task"))
+            ref, parent_problem = self._built_on(edit, (self.db.run(sid) or {}).get("task"))
             if parent_problem:
                 publisher.publish_dir(self.d.public, layout.submission_edit_prefix(sid), edit)
                 publisher.publish_admission(self.d.public, sid, {"passed": False, "violations": [parent_problem],
@@ -786,7 +784,8 @@ class Orchestrator:
                 "model_digest": adm["model_digest"], "built_on": [self._machine_id(on)], "timeline": {**rec["timeline"], "admitted": self.now()}})
             self._recovered(s)
 
-    def _built_on(self, edit_dir: Path, rec, task):
+    @staticmethod
+    def _built_on(edit_dir: Path, task):
         """What the uploaded spec stacks on, by the "parent" its edit.json always names: the sid of one of the run's
         starts (task.json -> starts; in its bundle as <sid>/edit/), or the base by its full name; nothing else.
         -> ({"sid"} ({} for the base model), problem or None)."""
