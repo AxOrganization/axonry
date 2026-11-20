@@ -74,7 +74,9 @@ def static_checks(spec_dir, spec, rules, prefix=None, ndims=None):
     e = rules["edit"]
     allowed = {f.removeprefix("edit/") for f in rules["upload"]["files"]}   # what an upload holds (and each parent)
     for p in Path(spec_dir).rglob("*"):
-        if p.is_file() and "__pycache__" not in p.parts and p.name not in allowed:
+        placed = p.parent != Path(spec_dir)     # in a published start placed beside the spec: an archived one keeps
+        if (p.is_file() and "__pycache__" not in p.parts and p.name not in allowed  # its lineage note (FLAT.json)
+                and not (placed and p.name == "FLAT.json")):
             out.append(f"{p.relative_to(spec_dir)}: not an upload file ({', '.join(sorted(allowed))})")
     required = [f.removeprefix("edit/") for f in rules["upload"]["required"]]
     out += [f"missing {f}" for f in required if not (Path(spec_dir) / f).exists()]

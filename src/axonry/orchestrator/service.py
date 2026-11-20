@@ -595,7 +595,7 @@ class Orchestrator:
             for start in task["starts"]:       # each start under its id, its full published chain included
                 chain = d / f"{start['sid']}_chain"
                 shutil.rmtree(chain, ignore_errors=True)
-                self._materialize_chain(start["sid"], chain, lineage=True)
+                self._materialize_chain(start["sid"], chain)
                 for p in sorted(chain.rglob("*")):
                     if p.is_file():
                         add(f"{start['sid']}/edit/{p.relative_to(chain).as_posix()}", p.read_bytes())
@@ -813,17 +813,16 @@ class Orchestrator:
         named = " or ".join([*(repr(s) for s in starts), repr(task["base_name"])])
         return {}, f"edit.json parent must be {named}, not {ref!r}"
 
-    def _materialize_chain(self, sid, dest: Path, lineage=False):
+    def _materialize_chain(self, sid, dest: Path):
         """A published edit with its whole chain, as the toolkit builds it: submissions/<sid>/edit/ into dest, the
         edit it stacks on where its spec names it (a sid: dest/<sid>/edit/; an earlier path such as
         "parent/edit.json": there), and so on down the chain. A champion's archive form instead, when it has one: its
-        model as one edit on the base (flat/) and its own REPORT.md, with FLAT.json (its lineage) for an agent's
-        bundle (lineage=True) - never in a build, whose files admission checks."""
+        model as one edit on the base (flat/, with FLAT.json: its lineage) and its own REPORT.md."""
         dest = Path(dest)
         rec = (self.db.sub(sid) or {}).get("record", {})
         edit, flat = layout.submission_edit_prefix(sid), layout.submission_flat_prefix(sid)
-        keys = ([(k, flat) for k, _ in self.d.public.list(flat) if lineage or k != flat + "FLAT.json"]
-                + [(edit + "REPORT.md", edit)] if rec.get("flat") else [(k, edit) for k, _ in self.d.public.list(edit)])
+        keys = ([(k, flat) for k, _ in self.d.public.list(flat)] + [(edit + "REPORT.md", edit)] if rec.get("flat")
+                else [(k, edit) for k, _ in self.d.public.list(edit)])
         for k, prefix in keys:
             data = self.d.public.get(k)
             if data is not None:

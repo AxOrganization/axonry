@@ -94,6 +94,7 @@ def test_axonry_check_builds_a_stacked_upload_on_the_bundles_parent(tmp_path, ba
                                                     "base_name": "unused@0"}))
     (tmp_path / sid).mkdir()
     parent.rename(tmp_path / sid / "edit")                  # as the bundle holds it
+    (tmp_path / sid / "edit" / "FLAT.json").write_text("{}")  # an archived start keeps its lineage note
     up = spec_dir(tmp_path, "upload", [ablate(2, 0.1, cols=[0, 1])], parent=sid)
     args = ["check", str(up), "--task", str(tmp_path / "task.json"), "--base-dir", str(base)]
     assert sandbox_tools.main(args) == 0

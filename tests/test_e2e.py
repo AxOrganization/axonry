@@ -287,9 +287,9 @@ class FakeExecutor:
 
     def admit(self, on, sid, spec_dir, base_doc):
         self.built.add((on, sid))
-        extra = [p for p in Path(spec_dir).rglob("*") if p.is_file() and p.name not in ("edit.json", "edit.npz",
-                                                                                         "REPORT.md")]
-        assert not extra, extra                         # as admit_remote's static check: upload files only
+        from axonry.evaluation.admit_remote import static_checks
+        files = [v for v in static_checks(spec_dir, {"ops": []}, COMP_RULES)[0] if "not an upload file" in v]
+        assert not files, files                         # admit_remote's own file check
         spec = json.loads((spec_dir / "edit.json").read_text())
         ref = spec.get("parent", "@")
         if ref.endswith(".json"):                       # an earlier form: a path to the spec it stacks on

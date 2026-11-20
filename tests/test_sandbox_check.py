@@ -34,3 +34,15 @@ def test_the_parent_is_a_start_of_the_bundle_by_its_id_or_the_base_by_its_full_n
     for bad in (None, "C1/edit.json", "parent/edit.json", "X9", "Org/B"):   # never left out, never another
         with pytest.raises(SystemExit, match='"P1" or "C1" or "Org/B@1"'):
             start_of(task, bad)
+
+
+def test_an_archived_starts_lineage_note_is_not_an_upload_file_but_may_sit_in_a_placed_start(tmp_path):
+    from axonry.evaluation.admit_remote import static_checks
+    rules = json.load(open(__file__.rsplit("/", 2)[0] + "/WeightSpaceProgramming/rules.json"))
+    for f in ("edit.json", "REPORT.md", "S1/edit/edit.json", "S1/edit/REPORT.md", "S1/edit/FLAT.json"):
+        (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f).write_text("{}")
+    assert not [v for v in static_checks(tmp_path, {"ops": []}, rules)[0] if "not an upload file" in v]
+    (tmp_path / "FLAT.json").write_text("{}")                     # in the upload itself: not an upload file
+    assert [v for v in static_checks(tmp_path, {"ops": []}, rules)[0] if "not an upload file" in v] == [
+        "FLAT.json: not an upload file (REPORT.md, edit.json, edit.npz)"]
