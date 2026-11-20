@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "read",
+    "idea"
+  ],
+  "properties": {
+    "read": {
+      "type": "boolean",
+      "description": "true when you read every file of submission/"
+    },
+    "idea": {
+      "type": "string",
+      "description": "the submission's idea in two to four plain, neutral sentences: the failure it targets, how the edit is found, what it changes (later reviewers compare other submissions with it)"
+    }
+  }
+}

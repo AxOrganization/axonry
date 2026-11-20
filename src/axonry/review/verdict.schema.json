@@ -7,12 +7,13 @@
     "conduct",
     "original",
     "message",
-    "fixable"
+    "fixable",
+    "idea"
   ],
   "properties": {
     "read": {
       "type": "boolean",
-      "description": "true when you read every file of the workspace (another way after a tool failed counts); false only if a file stayed unread"
+      "description": "true when you read every file of submission/ (and original/ when present) and, in full, every earlier submission you compared closely or whose idea has no summary in earlier/INDEX.md (another way after a tool failed counts); false only if one of those stayed unread"
     },
     "substantive": {
       "$ref": "#/$defs/check"
@@ -50,6 +51,10 @@
     "fixable": {
       "type": "boolean",
       "description": "when a check fails: true only if deleting parts of the submission (files, words, punctuation), keeping its idea, would make every check pass; false otherwise (e.g. no idea of its own, a copy). When all pass: true"
+    },
+    "idea": {
+      "type": "string",
+      "description": "the submission's idea in two to four plain, neutral sentences: the failure it targets, how the edit is found, what it changes (later reviewers compare other submissions with it)"
     }
   },
   "$defs": {

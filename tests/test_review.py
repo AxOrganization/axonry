@@ -143,3 +143,29 @@ def test_the_review_says_whether_deleting_can_fix_it():
     _, body = auto.review_body({**copy, "fixable": True}, ITEM)       # a copy is never fixable, whatever the model said
     assert not auto.fixable(body)
     assert auto.fixable("an older review, no mark")
+
+
+def test_earlier_ideas_are_listed_and_each_review_keeps_its_own(tmp_path):
+    ws = auto.prepare(GH(), ITEM, CONTENTS, rules(), tmp_path)
+    assert "(no summary: read it in full)" in (ws / "earlier" / "INDEX.md").read_text()
+    ideas = {auto.key(CONTENTS[0]): "ablate a refusal direction found from contrast pairs"}
+    ws = auto.prepare(GH(), ITEM, CONTENTS, rules(), tmp_path / "b", ideas)
+    assert "idea: ablate a refusal direction" in (ws / "earlier" / "INDEX.md").read_text()
+    ok = {k: {"ok": True, "reason": "fine"} for k in ("substantive", "conduct")}
+    good = {**ok, "original": {"ok": True, "reason": "new", "copies": None}, "message": "ok", "read": True,
+            "idea": "scale\nthe   loop heads"}
+    auto.run(Reader({"review": [ITEM], "contents": CONTENTS}), GH(), rules(), tmp_path / "c",
+             fake_model(tmp_path, good), once=True)
+    assert auto.load_ideas(tmp_path / "c")[auto.key(ITEM)] == "scale the loop heads"     # one line
+
+
+def test_an_idle_reviewer_summarizes_a_content_without_an_idea(tmp_path):
+    gh = GH()
+    gh.verdict = "approved"                                   # nothing waits for review
+    auto.run(Reader({"review": [], "contents": CONTENTS}), gh, rules(), tmp_path,
+             fake_model(tmp_path, {"read": True, "idea": "an earlier idea"}), once=True)
+    assert auto.load_ideas(tmp_path)[auto.key(CONTENTS[0])] == "an earlier idea"
+    for _ in range(auto.MAX_ATTEMPTS + 1):                    # a summary that keeps failing is given up
+        auto.run(Reader({"review": [], "contents": CONTENTS}), gh, rules(), tmp_path / "b", "false", once=True)
+    assert json.loads((tmp_path / "b" / "attempts.json").read_text())["idea:" + auto.key(CONTENTS[0])] == \
+        auto.MAX_ATTEMPTS
