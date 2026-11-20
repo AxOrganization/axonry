@@ -403,3 +403,29 @@ def test_a_step_uses_the_status_read_beforehand():
     assert supervisor.step(1000, task, None, Runner(), {}, False, False, st) == "running"
     with pytest.raises(MachineError):                     # a status that could not be read: that run retries
         supervisor.step(1000, task, None, Runner(), {}, False, False, MachineError("arbos down"))
+
+
+def test_no_machine_is_rented_while_the_vast_credit_is_low(tmp_path):
+    from axonry.pool import Machines, NoMachine
+    clock = [1000.0]
+    f, api, remote = fleet(tmp_path, clock)
+    api.call = lambda method, path, body=None, query=None: {"credit": 5.0}
+    pool = Machines(f.db, str(tmp_path / "k"), None, f)
+    with pytest.raises(NoMachine, match="credit"):     # the queue waits; the entry is not backed off
+        pool.rent("s1", "RTX 4090", 4)
+    assert not api.created
+    api.call = lambda method, path, body=None, query=None: {"credit": 100.0}
+    clock[0] += 301
+    pool.rent("s1", "RTX 4090", 4)
+    assert api.created
+
+
+def test_an_account_out_of_credit_makes_the_queue_wait(tmp_path):
+    from axonry.pool import Machines, NoMachine
+    clock = [1000.0]
+    f, api, remote = fleet(tmp_path, clock)
+    api.call = lambda method, path, body=None, query=None: {"credit": 100.0}
+    api.taken, api.taken_msg = 11, b'{"error":"insufficient_credit"}'
+    api.offers = lambda *a, **k: [{"id": 11, "machine_id": 1, "dph_total": 3.0}]
+    with pytest.raises(NoMachine):
+        Machines(f.db, str(tmp_path / "k"), None, f).rent("s1", "RTX 4090", 4)

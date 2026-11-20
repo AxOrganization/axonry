@@ -50,6 +50,10 @@ class VastError(MachineError):
     pass
 
 
+class LowCredit(VastError):
+    """The vast.ai account's credit is too low to rent: nothing failed, the queue waits for a top-up."""
+
+
 class SetupFailed(VastError):
     """The machine will not become ready (setup.sh failed, or not ready in time): it is destroyed."""
 
@@ -117,7 +121,7 @@ class Fleet:
     def __init__(self, api: VastAPI, db, *, image: str, disk_gb: int, ssh_key: str, bundle, state_dir: Path,
                  min_reliability=0.95, min_down_mbps=200, exclude_countries=("CN",), verified_only=False,
                  min_cuda=0.0, setup_minutes=45,
-                 proxy_command=None, clock=time.time, remote=None, bundle_url=None, items=None):
+                 proxy_command=None, clock=time.time, remote=None, bundle_url=None, items=None, min_credit=20.0):
         """bundle: () -> path of the setup bundle (built once). items: () -> path of the benchmark items (built once),
         given to evaluation machines only. bundle_url: (path) -> a URL the machine downloads it
         from (else it is copied over ssh, which on a slow link holds up the caller). remote: (ssh, scp) for tests."""
@@ -130,6 +134,21 @@ class Fleet:
         self._running_since = {}      # purpose -> when vast.ai first reported the container running
         self.dir.mkdir(parents=True, exist_ok=True)
         self._key_on_account = False
+        self.min_credit, self._credit = min_credit, (None, 0.0)     # (credit, when read)
+
+    def credit(self, max_age=300) -> float | None:
+        """The account's credit in USD (read at most every max_age s; None when vast.ai does not answer)."""
+        value, at = self._credit
+        if value is None or self.clock() - at > max_age:
+            try:
+                value = float((self.api.call("GET", "/users/current/") or {}).get("credit"))
+            except Exception:
+                return value
+            self._credit = (value, self.clock())
+            if value < self.min_credit:
+                log.warning("vast.ai credit $%.2f is under $%.0f: top it up (no machine is rented meanwhile)",
+                            value, self.min_credit)
+        return value
 
     # ---- queries
     def get(self, purpose) -> dict | None:
@@ -144,7 +163,12 @@ class Fleet:
 
     # ---- renting
     def rent(self, purpose: str, gpu_name: str, gpus: int):
-        """The cheapest suitable offer (never a vast machine whose setup failed before)."""
+        """The cheapest suitable offer (never a vast machine whose setup failed before). Raises LowCredit while the
+        account's credit is under min_credit: its machines stop when it runs out, so none is added."""
+        credit = self.credit()
+        if credit is not None and credit < self.min_credit:
+            raise LowCredit(f"vast.ai credit ${credit:.2f} is under ${self.min_credit:.0f}: no machine is rented "
+                            "until it is topped up")
         if not self._key_on_account:
             self.api.ensure_ssh_key(Path(self.key + ".pub").read_text().strip())
             self._key_on_account = True

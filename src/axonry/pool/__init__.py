@@ -35,7 +35,12 @@ class Machines:
             return
         if self.vast is None:
             raise NoMachine(f"no owned machine free for {purpose} ({gpus} x {gpu_name}) and vast.ai is disabled")
-        self.vast.rent(purpose, gpu_name, gpus)
+        try:
+            self.vast.rent(purpose, gpu_name, gpus)
+        except MachineError as e:
+            if "LowCredit" in type(e).__name__ or "insufficient_credit" in str(e):
+                raise NoMachine(str(e)) from e     # the account, not the entry: the queue waits, nothing backs off
+            raise
 
     def advance(self, purpose) -> str:
         row = self.get(purpose)
