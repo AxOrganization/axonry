@@ -1812,27 +1812,44 @@ def test_a_champion_is_archived_as_one_edit_on_the_base_with_its_lineage(tmp_pat
     sa = "0000000101-0001"
     assert orch.db.sub(sa)["reason_code"] == "NEW_CHAMPION"
     orch.archive()
-    assert orch.d.executor.flattened == [sa]
-    flat = json.loads(pub.get(layout.submission_flat_prefix(sa) + "FLAT.json"))
-    assert flat["sid"] == sa and flat["lineage"] == []
-    pub_edit = json.loads(pub.get(layout.submission_edit_prefix(sa) + "edit.json"))
-    assert pub_edit["parent"].startswith("Qwen/")             # its own upload stays as it was
-    orch.archive()
-    assert orch.d.executor.flattened == [sa]                  # once
-    pay(orch, chain, "E", 110, 1, parent=sa)                  # a child: its start is the archive form
+    assert not getattr(orch.d.executor, "flattened", None)   # on the base: one layer already
+    pay(orch, chain, "E", 110, 1, parent=sa)                  # a child, then champion: archived
     chain.head = 110
     orch.intake()
     se = "0000000110-0001"
     run_until_quiet(orch, clock, rounds=6)
-    names, _ = orch.d.runner.bundles[se]
-    assert {f"{sa}/edit/edit.json", f"{sa}/edit/FLAT.json", f"{sa}/edit/REPORT.md"} <= set(names)   # lineage, report
-    assert orch.db.sub(se)["status"] == "PUBLISHED" and orch.db.sub(se)["record"]["parent"] == sa
-    assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION"
-    assert orch.db.sub(se)["record"]["flat"]["lineage"] == [sa]       # the new champion archived (each tick), lineage kept
+    assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION" and orch.db.sub(se)["record"]["parent"] == sa
+    assert orch.d.executor.flattened == [se]                  # once (each tick tries the ones without it)
+    assert orch.db.sub(se)["record"]["flat"]["lineage"] == [sa]
     assert json.loads(pub.get(layout.submission_flat_prefix(se) + "FLAT.json"))["lineage"] == [sa]
+    assert json.loads(pub.get(layout.submission_edit_prefix(se) + "edit.json"))["parent"] == sa   # its upload stays
     flat_dir = tmp_path / "flat"
-    orch._materialize_chain(se, flat_dir)                     # after: one edit on the base, however long its chain
+    orch._materialize_chain(se, flat_dir)                     # one edit on the base, however long its chain
     assert not (flat_dir / sa).exists() and json.loads((flat_dir / "edit.json").read_text())["parent"].startswith("Qwen/")
+    pay(orch, chain, "B", 120, 1)                             # a run on the archived champion: lineage and report
+    chain.head = 120
+    orch.intake()
+    run_until_quiet(orch, clock, rounds=6)
+    names, _ = orch.d.runner.bundles["0000000120-0001"]
+    assert {f"{se}/edit/edit.json", f"{se}/edit/FLAT.json", f"{se}/edit/REPORT.md"} <= set(names)
+    assert not any(n.startswith(f"{se}/edit/{sa}/") for n in names)
+
+
+def test_archiving_stops_when_the_model_is_gone(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    run_until_quiet(orch, clock, rounds=6)
+    sa = "0000000101-0001"
+    pay(orch, chain, "E", 110, 1, parent=sa)
+    chain.head = 110
+    orch.intake()
+    orch.d.executor.flatten = lambda on, sid, base_doc: ({"ok": False, "problem": "its evaluated model is gone"}, {})
+    run_until_quiet(orch, clock, rounds=6)
+    se = "0000000110-0001"
+    assert orch.db.sub(se)["record"]["flat_problem"] == "its evaluated model is gone"   # recorded, not retried
+    assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION" and not orch.db.sub(se)["record"].get("flat")
 
 
 def test_an_upload_without_a_task_record_is_refused_with_a_reason(tmp_path):

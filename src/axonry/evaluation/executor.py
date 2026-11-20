@@ -137,6 +137,11 @@ class SshExecutor:
         """A champion's chain (placed by admission on that machine) as one edit on the base, checked identical to its
         evaluated model there (axonry.evaluation.flatten_remote, CPU only) -> (its result, {file name: bytes} when ok)."""
         from ..registry import base_dirname  # noqa: PLC0415
+        d = f"{self.root}/eval/{sid}"
+        gone = self._ssh(on, f"cd {shlex.quote(d)} && for f in edit/edit.json model/config.json; do test -e $f || "
+                             "echo $f; done", timeout=120).split()
+        if gone:
+            return {"ok": False, "problem": f"its evaluated model is no longer on {on} (no {', '.join(gone)})"}, {}
         cmd, ln = self._command(sid, base_dirname(base_doc), [
             "python3", "-m", "axonry.evaluation.flatten_remote", "--edit", "edit", "--model", "model",
             "--base-dir", "base", "--out", "flat"])
@@ -147,9 +152,8 @@ class SshExecutor:
             raise ExecError(f"flatten produced no result: {out[-500:]}") from None
         if not res.get("ok"):
             return res, {}
-        d = f"{self.root}/eval/{sid}/flat"
-        names = self._ssh(on, f"ls {shlex.quote(d)}").split()
-        return res, {n: self.fetch_file(on, f"{d}/{n}") for n in names}
+        names = self._ssh(on, f"ls {shlex.quote(d + '/flat')}").split()
+        return res, {n: self.fetch_file(on, f"{d}/flat/{n}") for n in names}
 
     @staticmethod
     def _spec(bench_docs):

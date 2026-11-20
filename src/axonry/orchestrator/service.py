@@ -839,8 +839,8 @@ class Orchestrator:
         own edit with its lineage (FLAT.json); from then on it is rebuilt from that (one layer on the base)."""
         for sid in sorted({c["sid"] for c in self.db.champions()}):
             s = self.db.sub(sid)
-            if not s or s["record"].get("flat") or s["record"].get("flat_problem"):
-                continue
+            if not s or not s["record"].get("parent") or s["record"].get("flat") or s["record"].get("flat_problem"):
+                continue                  # one on the base is one layer already
             on = next((n for n in self._eval_ready() if self._machine_id(n) in self._holders(s)), None)
             if on is None:
                 continue                  # its machine is busy setting up or gone: tried again next tick
