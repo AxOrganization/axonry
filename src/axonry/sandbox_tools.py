@@ -33,21 +33,15 @@ def done(_a):
 
 
 def start_of(task, ref):
-    """What an upload's "parent" may name, as admission accepts it -> the bundle directory of the start, or None for
-    the base; anything else stops here. A task listing its starts: "<id>/edit.json" of one of them, or the base's
-    full name, always named. An older task: parent/edit.json, champion/edit.json, or nothing (the base)."""
-    if "starts" in task:
-        ids = [s["sid"] for s in task["starts"]]
-        if ref == task["base_name"]:
-            return None
-        if isinstance(ref, str) and ref.endswith("/edit.json") and ref[:-len("/edit.json")] in ids:
-            return ref[:-len("/edit.json")]
-        named = " or ".join([*(f'"{i}/edit.json"' for i in ids), f'"{task["base_name"]}" (the base model)'])
-        raise SystemExit(f"edit.json parent must be {named}, not {ref!r}")
-    name = Path(ref).parent.as_posix() if ref else None
-    if name and name not in ("parent", "champion"):
-        raise SystemExit(f'edit.json parent must be "parent/edit.json" or "champion/edit.json", not {ref!r}')
-    return name
+    """What an upload's "parent" may name, as admission accepts it: the sid of one of the task's starts (-> that sid)
+    or the base's full name (-> None); anything else stops here."""
+    ids = [s["sid"] for s in task["starts"]]
+    if ref == task["base_name"]:
+        return None
+    if ref in ids:
+        return ref
+    named = " or ".join([*(f'"{i}"' for i in ids), f'"{task["base_name"]}" (the base model)'])
+    raise SystemExit(f"edit.json parent must be {named}, not {ref!r}")
 
 
 def check(a):
@@ -63,20 +57,14 @@ def check(a):
     if not (out / "edit.json").is_file():
         raise SystemExit(f"{out}: give the upload's edit/ directory (the one holding edit.json)")
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
-        ref = json.loads((out / "edit.json").read_text()).get("parent")
-        name = start_of(task, ref)                              # the bundle directory it stacks on, or None (base)
-        if name is None and ref:                                # the base, by its full name: built from the base
-            out = shutil.copytree(out, Path(tmp) / "out")
-            spec = json.loads((out / "edit.json").read_text())
-            spec.pop("parent")
-            (out / "edit.json").write_text(json.dumps(spec))
-        if name and not (out / name).exists():   # uploads only reference the published start
-            parent = Path(a.parent) if a.parent else task_path.parent / name / "edit"
+        sid = start_of(task, json.loads((out / "edit.json").read_text()).get("parent"))
+        if sid and not (out / sid / "edit" / "edit.json").exists():   # uploads only name the published start
+            parent = Path(a.parent) if a.parent else task_path.parent / sid / "edit"
             if not (parent / "edit.json").exists():
-                raise SystemExit(f"the edit it stacks on is not at {parent}: copy the bundle's {name}/edit/ there or "
+                raise SystemExit(f"the edit it stacks on is not at {parent}: copy the bundle's {sid}/edit/ there or "
                                  "pass --parent")
             out = shutil.copytree(out, Path(tmp) / "out")
-            shutil.copytree(parent, out / name)
+            shutil.copytree(parent, out / sid / "edit")
         res = admit(str(out), a.base_dir, task["base"])
     print(json.dumps(res, indent=1))
     return 0 if res["passed"] else 1

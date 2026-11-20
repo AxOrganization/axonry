@@ -35,8 +35,8 @@ def _parent(task) -> str:
             "that model, and the limits apply to your own ops, measured against it.\n") if starts else ""
     return f"""
 ## Starting point
-{have}Your `edit.json` always names what it starts from in `"parent"`: `"<id>/edit.json"` for a published edit of
-this bundle, or `"{task.get('base_name')}"` for the base model.
+{have}Your `edit.json` always names what it starts from in `"parent"`: the id of a published edit of this bundle
+(`"<id>"`), or `"{task.get('base_name')}"` for the base model.
 """
 
 

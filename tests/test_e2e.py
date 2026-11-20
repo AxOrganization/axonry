@@ -246,7 +246,7 @@ class FakeRunner:
         (out / "edit.json").write_text(json.dumps(PLANS[n]["spec"]))
         (out / "REPORT.md").write_text(f"plan {n}")
         start = starts.get(self.start_on.get(h.sid) or ("parent" if parent_files else None))
-        ref = f"{start}/edit.json" if start else task["base_name"]   # the parent is always named
+        ref = start or task["base_name"]                             # the parent is always named
         spec = {**PLANS[n]["spec"], "parent": ref}
         if self.start_on.get(h.sid) == "omit":                      # an agent that leaves the parent out
             spec.pop("parent")
@@ -285,14 +285,22 @@ class FakeExecutor:
     def admit(self, on, sid, spec_dir, base_doc):
         self.built.add((on, sid))
         spec = json.loads((spec_dir / "edit.json").read_text())
-        if spec.get("parent"):                          # the chain it names was rebuilt where it names it
-            assert (spec_dir / spec["parent"]).exists(), spec["parent"]
+        if "@" not in spec.get("parent", "@"):          # a start: its chain placed as the toolkit reads it
+            assert (spec_dir / spec["parent"] / "edit" / "edit.json").exists(), spec["parent"]
         spec.pop("parent", None)
         self.specs[sid] = spec
         if "too_big" in spec["ops"]:
             return {"passed": False, "violations": ["layers.3.mlp.down_proj.weight: relative change 0.312 > 0.25"],
                     "info": {}, "model_digest": None}
         return {"passed": True, "violations": [], "info": {"tensors": 1}, "model_digest": "md-" + "".join(spec["ops"])}
+
+    def flatten(self, on, sid, base_doc):
+        """The champion as one edit on the base: here, its own ops (its plan) on the base."""
+        self.flattened = getattr(self, "flattened", []) + [sid]
+        spec = {"base": base_doc["id"], "parent": f"{base_doc['hf_repo']}@{base_doc['revision']}",
+                "ops": self.specs[sid]["ops"]}
+        return {"ok": True, "ops": len(spec["ops"]), "bytes": 1}, \
+            {"edit.json": json.dumps(spec).encode(), "edit.npz": b"npz"}
 
     def start(self, on, model_id, base_doc, bench_docs, salt):
         assert model_id.startswith("base:") or (on, model_id) in self.built, (on, model_id)   # its model is there
@@ -713,10 +721,12 @@ def test_stacking_on_a_published_parent(tmp_path):
     assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION"   # judged against the champion (its parent)
     assert pub.get(layout.submission_edit_prefix(se) + "edit.json")
     assert pub.get(layout.submission_edit_prefix(se) + "parent/edit.json") is None   # chains are not stored twice
+    published = json.loads(pub.get(layout.submission_edit_prefix(se) + "edit.json"))
+    assert published["parent"] == sa                          # its upload keeps what it stacked on
+    assert orch.db.sub(se)["record"]["flat"]["lineage"] == [sa]       # archived as a champion, its lineage recorded
     chain = tmp_path / "chain"
-    orch._materialize_chain(se, chain)                        # rebuilt from the public edits, nested by parent
-    assert json.loads((chain / "edit.json").read_text())["parent"] == f"{sa}/edit.json"
-    assert (chain / sa / "edit.json").exists() and "parent" not in json.loads((chain / sa / "edit.json").read_text())
+    orch._materialize_chain(se, chain)                        # rebuilt as one edit on the base
+    assert not (chain / sa).exists() and json.loads((chain / "edit.json").read_text())["parent"].startswith("Qwen/")
 
 
 def test_a_parent_that_can_never_qualify_rejects(tmp_path):
@@ -1669,10 +1679,8 @@ def test_an_agent_may_build_on_the_champion_instead(tmp_path):
     assert f"{sa}/edit/edit.json" in names and f"`{sa}/edit/` (the champion)" in text
     assert orch.db.sub(se)["record"]["parent"] == sa         # what it actually stacked on
     assert orch.db.sub(se)["status"] == "PUBLISHED"
-    chain_dir = tmp_path / "chain"                           # its chain rebuilt for a child: A under its id
-    orch._materialize_chain(se, chain_dir)
-    assert json.loads((chain_dir / "edit.json").read_text())["parent"] == f"{sa}/edit.json"
-    assert (chain_dir / sa / "edit.json").exists()
+    assert json.loads(pub.get(layout.submission_edit_prefix(se) + "edit.json"))["parent"] == sa
+    assert orch.db.sub(se)["record"]["flat"]["lineage"] == [sa]
 
 
 def test_a_block_read_incomplete_is_read_again_later(tmp_path):
@@ -1786,3 +1794,36 @@ def test_an_upload_must_name_what_it_starts_from(tmp_path):
     run_until_quiet(orch, clock, rounds=6)
     s = orch.db.sub(sid)
     assert s["reason_code"] == "REJECTED_RULES" and "Qwen/" in s["reason"] and "not None" in s["reason"]
+
+
+def test_a_champion_is_archived_as_one_edit_on_the_base_with_its_lineage(tmp_path):
+    from axonry.common import layout
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    run_until_quiet(orch, clock, rounds=6)
+    sa = "0000000101-0001"
+    assert orch.db.sub(sa)["reason_code"] == "NEW_CHAMPION"
+    orch.archive()
+    assert orch.d.executor.flattened == [sa]
+    flat = json.loads(pub.get(layout.submission_flat_prefix(sa) + "FLAT.json"))
+    assert flat["sid"] == sa and flat["lineage"] == []
+    pub_edit = json.loads(pub.get(layout.submission_edit_prefix(sa) + "edit.json"))
+    assert pub_edit["parent"].startswith("Qwen/")             # its own upload stays as it was
+    orch.archive()
+    assert orch.d.executor.flattened == [sa]                  # once
+    pay(orch, chain, "E", 110, 1, parent=sa)                  # a child: its start is the archive form
+    chain.head = 110
+    orch.intake()
+    se = "0000000110-0001"
+    run_until_quiet(orch, clock, rounds=6)
+    names, _ = orch.d.runner.bundles[se]
+    assert f"{sa}/edit/edit.json" in names and f"{sa}/edit/FLAT.json" not in names
+    assert orch.db.sub(se)["status"] == "PUBLISHED" and orch.db.sub(se)["record"]["parent"] == sa
+    assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION"
+    assert orch.db.sub(se)["record"]["flat"]["lineage"] == [sa]       # the new champion archived (each tick), lineage kept
+    assert json.loads(pub.get(layout.submission_flat_prefix(se) + "FLAT.json"))["lineage"] == [sa]
+    flat_dir = tmp_path / "flat"
+    orch._materialize_chain(se, flat_dir)                     # after: one edit on the base, however long its chain
+    assert not (flat_dir / sa).exists() and json.loads((flat_dir / "edit.json").read_text())["parent"].startswith("Qwen/")

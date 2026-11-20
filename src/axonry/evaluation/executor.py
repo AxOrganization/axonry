@@ -133,6 +133,24 @@ class SshExecutor:
         except ValueError:      # it crashed (exit 1) or printed no verdict: the candidate's own job failed
             raise JobFailed(f"admission produced no result: {out[-500:]}") from None
 
+    def flatten(self, on, sid: str, base_doc: dict) -> tuple[dict, dict]:
+        """A champion's chain (placed by admission on that machine) as one edit on the base, checked identical to its
+        evaluated model there (axonry.evaluation.flatten_remote, CPU only) -> (its result, {file name: bytes} when ok)."""
+        from ..registry import base_dirname  # noqa: PLC0415
+        cmd, ln = self._command(sid, base_dirname(base_doc), [
+            "python3", "-m", "axonry.evaluation.flatten_remote", "--edit", "edit", "--model", "model",
+            "--base-dir", "base", "--out", "flat"])
+        out = self._job(on, sid, cmd, gpus=False, timeout=3600, setup=ln, ok=("0", "1"))
+        try:
+            res = json.loads(out[out.index("{"):])
+        except ValueError:
+            raise ExecError(f"flatten produced no result: {out[-500:]}") from None
+        if not res.get("ok"):
+            return res, {}
+        d = f"{self.root}/eval/{sid}/flat"
+        names = self._ssh(on, f"ls {shlex.quote(d)}").split()
+        return res, {n: self.fetch_file(on, f"{d}/{n}") for n in names}
+
     @staticmethod
     def _spec(bench_docs):
         return [{"key": f"{b['id']}@{b['version']}", "task": b["task"], "n": b["samples_per_item"],

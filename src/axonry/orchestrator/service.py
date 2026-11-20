@@ -576,11 +576,6 @@ class Orchestrator:
         champ = self.db.champion(rec["base"])
         return {"n_win": rules["judge"]["n_win"], "champion": champ["sid"] if champ else None}
 
-    def _parent_files(self, parent_sid) -> dict:
-        """{relative path: bytes} of a published submission's edit/ directory (the stacking parent)."""
-        prefix = layout.submission_edit_prefix(parent_sid)
-        return {k[len(prefix):]: self.d.public.get(k) for k, _ in self.d.public.list(prefix)}
-
     def _bundle_path(self, sid) -> Path:
         return Path(self.d.work_dir) / sid / f"axonry-task-{sid}.tar.gz"
 
@@ -767,9 +762,8 @@ class Orchestrator:
             build_dir = Path(self.d.work_dir) / sid / "build"
             shutil.rmtree(build_dir, ignore_errors=True)
             shutil.copytree(edit, build_dir)
-            self._from_base(build_dir)
             if ref:     # the published chain where the spec names it (not uploaded: it is public already)
-                self._materialize_chain(ref["sid"], build_dir / Path(ref["path"]).parent)
+                self._materialize_chain(ref["sid"], build_dir / ref["sid"] / "edit")
             ready = self._eval_ready()
             if not ready:
                 continue                       # eval_machine is renting or setting one up
@@ -792,57 +786,70 @@ class Orchestrator:
                 "model_digest": adm["model_digest"], "built_on": [self._machine_id(on)], "timeline": {**rec["timeline"], "admitted": self.now()}})
             self._recovered(s)
 
-    @staticmethod
-    def _starts(rec, task) -> dict:
-        """What a run's edit may stack on, by the "parent" its edit.json names -> {name: sid, None for the base}: a
-        start of its bundle as "<id>/edit.json" (the entry's parent, the champion when the run started), or the
-        base by its full name; nothing else, and the parent is always named. A run started before the bundle listed
-        its starts names them parent/edit.json and champion/edit.json, the base by no parent."""
-        task = task or {}
-        if "starts" in task:
-            return {**{f"{s['sid']}/edit.json": s["sid"] for s in task["starts"]}, task["base_name"]: None}
-        out = {None: None, **({"parent/edit.json": rec["parent"]} if rec.get("parent") else {})}
-        champ = (task.get("judge") or {}).get("champion")
-        if champ and champ != rec.get("parent"):
-            out["champion/edit.json"] = champ
-        return out
-
     def _built_on(self, edit_dir: Path, rec, task):
-        """-> ({path, sid} of what the uploaded spec stacks on ({} for the base model), problem or None)."""
+        """What the uploaded spec stacks on, by the "parent" its edit.json always names: the sid of one of the run's
+        starts (task.json -> starts; in its bundle as <sid>/edit/), or the base by its full name; nothing else.
+        -> ({"sid"} ({} for the base model), problem or None)."""
         try:
-            path = json.loads((Path(edit_dir) / "edit.json").read_text()).get("parent")
+            ref = json.loads((Path(edit_dir) / "edit.json").read_text()).get("parent")
         except ValueError as e:
             return {}, f"edit.json: {e}"
-        starts = self._starts(rec, task)
-        if path not in starts:
-            named = " or ".join(repr(k) for k in starts if k is not None)
-            return {}, f"edit.json parent must be {named}, not {path!r}"
-        return ({"path": path, "sid": starts[path]} if starts[path] else {}), None
+        starts = [s["sid"] for s in task["starts"]]
+        if ref == task["base_name"]:
+            return {}, None
+        if ref in starts:
+            return {"sid": ref}, None
+        named = " or ".join([*(repr(s) for s in starts), repr(task["base_name"])])
+        return {}, f"edit.json parent must be {named}, not {ref!r}"
 
     def _materialize_chain(self, sid, dest: Path):
-        """Rebuild a published edit with its whole chain: submissions/<sid>/edit/ into dest, the edit it stacks on
-        where its spec names it (dest/parent/ or dest/champion/), and so on down the chain."""
+        """A published edit with its whole chain, as the toolkit builds it: submissions/<sid>/edit/ into dest, the
+        edit it stacks on where its spec names it (a sid: dest/<sid>/edit/; an earlier path such as
+        "parent/edit.json": there), and so on down the chain. A champion's archive form instead, when it has one: its
+        model as one edit on the base (flat/)."""
         dest = Path(dest)
-        for rel, data in self._parent_files(sid).items():
-            p = dest / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(data)
-        parent = (self.db.sub(sid) or {}).get("record", {}).get("parent")
-        ref = json.loads((dest / "edit.json").read_text()).get("parent") if (dest / "edit.json").exists() else None
-        if parent and ref:
-            self._materialize_chain(parent, dest / Path(ref).parent)
-        else:
-            self._from_base(dest)
+        rec = (self.db.sub(sid) or {}).get("record", {})
+        prefix = layout.submission_flat_prefix(sid) if rec.get("flat") else layout.submission_edit_prefix(sid)
+        for k, _ in self.d.public.list(prefix):
+            if k != prefix + "FLAT.json":
+                (dest / k[len(prefix):]).parent.mkdir(parents=True, exist_ok=True)
+                (dest / k[len(prefix):]).write_bytes(self.d.public.get(k))
+        ref = json.loads((dest / "edit.json").read_text()).get("parent")
+        if rec.get("parent") and ref and not rec.get("flat"):
+            where = dest / Path(ref).parent if ref.endswith(".json") else dest / ref / "edit"
+            self._materialize_chain(rec["parent"], where)
 
-    @staticmethod
-    def _from_base(edit_dir: Path):
-        """A spec naming the base (its full name, not a path) builds from the base: the copy built drops that name."""
-        p = Path(edit_dir) / "edit.json"
-        if p.exists():
-            spec = json.loads(p.read_text())
-            if spec.get("parent") and not str(spec["parent"]).endswith("/edit.json"):
-                spec.pop("parent")
-                p.write_text(json.dumps(spec))
+    def archive(self):
+        """Each champion's archive form, once: its whole chain as one edit on the base (wsp.edits.flatten_chain),
+        built on the evaluation machine holding its evaluated model and checked identical to it, published beside its
+        own edit with its lineage (FLAT.json); from then on it is rebuilt from that (one layer on the base)."""
+        for sid in sorted({c["sid"] for c in self.db.champions()}):
+            s = self.db.sub(sid)
+            if not s or s["record"].get("flat") or s["record"].get("flat_problem"):
+                continue
+            on = next((n for n in self._eval_ready() if self._machine_id(n) in self._holders(s)), None)
+            if on is None:
+                continue                  # its machine is busy setting up or gone: tried again next tick
+            try:
+                res, files = self.d.executor.flatten(on, sid, registry.load_base(s["base"], self.d.registry_root))
+            except Exception as e:  # noqa: BLE001 - ours: tried again next tick
+                log.warning("archiving %s on %s: %s", sid, on, str(e)[:300])
+                continue
+            if not res.get("ok"):
+                log.warning("archiving %s: %s", sid, res.get("problem"))
+                self.db.update(sid, record_patch={"flat_problem": res.get("problem")})
+                continue
+            lineage, p = [], s["record"].get("parent")
+            while p:
+                lineage.append(p)
+                p = (self.db.sub(p) or {}).get("record", {}).get("parent")
+            prefix = layout.submission_flat_prefix(sid)
+            for name, data in files.items():
+                self.d.public.put(prefix + name, data)
+            info = {"sid": sid, "lineage": lineage, "ops": res["ops"], "bytes": res["bytes"]}
+            self.d.public.put(prefix + "FLAT.json", pretty(info))     # last: the archive is complete
+            self.db.update(sid, record_patch={"flat": info})
+            log.info("%s archived as one edit on the base (%d ops, lineage %s)", sid, res["ops"], lineage)
 
     def _publish_agent(self, sid, rec):
         d = Path(self.d.work_dir) / sid / "agent"
@@ -1377,7 +1384,7 @@ class Orchestrator:
         "main": ("intake", "schedule", "supervise", "decide", "settle_prs", "refresh_weights", "publish_status",
                  "janitor", "snapshot_state", "keep_agents"),
         # slow GPU work on the evaluation machine (admission builds, benchmark generation): its own process
-        "eval": ("eval_machine", "collect", "evaluate"),
+        "eval": ("eval_machine", "collect", "evaluate", "archive"),
     }
 
     def tick(self, role="all"):

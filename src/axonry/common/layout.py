@@ -59,6 +59,11 @@ def submission_edit_prefix(sid: str) -> str:
     return f"submissions/{sid}/edit/"
 
 
+def submission_flat_prefix(sid: str) -> str:
+    """A champion's archive form: one edit on the base building exactly its model (FLAT.json: its lineage)."""
+    return f"submissions/{sid}/flat/"
+
+
 def submission_agent_prefix(sid: str) -> str:
     return f"submissions/{sid}/agent/"
 
