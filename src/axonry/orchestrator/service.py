@@ -886,8 +886,8 @@ class Orchestrator:
                     continue
                 if model_id == s["sid"]:
                     here = [n for n in idle if self._machine_id(n) in self._holders(s)]
-                    if not here and idle and not self._held(s) and self._rebuild(idle[0], s, rules):
-                        here = idle[:1]          # the machine holding it is gone: built again on this one
+                    if not here and idle and self._rebuild(idle[0], s, rules):
+                        here = idle[:1]          # its machine is busy or gone: built again on an idle one
                     if not here:
                         continue
                     on = here[0]
@@ -906,18 +906,15 @@ class Orchestrator:
                 log.info("evaluating %s on %s", model_id, on)
 
     def _holders(self, s) -> list:
-        """The machines (instances) holding a candidate's admitted model: the one admission built it on. A model built
-        again elsewhere is not bit-identical (seen: another digest), so a candidate is evaluated only there."""
+        """The machines (instances) holding a candidate's model: the one admission (or a rebuild) built it on. A
+        build elsewhere is not bit-identical (another digest), so the candidate is evaluated where its model is."""
         return s["record"].get("built_on") or [self._machine_id(EVAL)]     # before built_on: admitted on eval
 
-    def _held(self, s) -> bool:
-        """Whether a machine of the fleet still holds the candidate's model."""
-        alive = {self._machine_id(n) for n in eval_names(self.d.eval_machines)} - {None}
-        return bool(alive & set(self._holders(s)))
-
     def _rebuild(self, on, s, rules) -> bool:
-        """The only machine holding a candidate's model is gone: admission builds it again on another (the same spec;
-        the build may differ in its last bits, so the new model and digest are the ones evaluated). Ours if it fails."""
+        """A candidate next in line while the machine holding its model is busy (or gone): admission builds it again on
+        an idle one, so the queue spreads over every evaluation machine. The same spec; the build may differ in its
+        last bits, so the new model and digest are the ones evaluated (the admitted digest is kept beside). Ours if it
+        fails: logged, tried again next tick."""
         sid = s["sid"]
         try:
             adm = self.d.executor.admit(on, sid, Path(self.d.work_dir) / sid / "build",
@@ -927,9 +924,11 @@ class Orchestrator:
         except Exception as e:
             log.warning("rebuilding %s on %s: %s (tried again next tick)", sid, on, str(e)[:300])
             return False
-        log.warning("%s: its model's machine is gone; built again on %s (digest %s, was %s)", sid, on,
-                    adm["model_digest"], s["record"].get("model_digest"))
-        self.db.update(sid, record_patch={"model_digest": adm["model_digest"], "built_on": [self._machine_id(on)]})
+        rec = s["record"]
+        log.info("%s: built again on %s to be evaluated there (digest %s, admitted %s)", sid, on,
+                 adm["model_digest"], rec.get("model_digest"))
+        self.db.update(sid, record_patch={"model_digest": adm["model_digest"], "built_on": [self._machine_id(on)],
+                                          "admitted_digest": rec.get("admitted_digest") or rec.get("model_digest")})
         return True
 
     def _eval_load(self, name) -> int:

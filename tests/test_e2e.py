@@ -1691,7 +1691,7 @@ def test_a_block_read_incomplete_is_read_again_later(tmp_path):
     assert orch.db.get("cursor") >= 101 and orch.db.sub("0000000101-0001") is not None   # read again: nothing lost
 
 
-def test_a_candidate_is_evaluated_only_on_the_machine_its_model_was_built_on(tmp_path):
+def test_the_evaluation_queue_spreads_over_the_machines(tmp_path):
     from axonry.pool.machine import EVAL
     orch, chain, clock, pub = make(tmp_path)
     orch.d.eval_machines, orch.d.eval_scale_up = 2, 0
@@ -1699,12 +1699,14 @@ def test_a_candidate_is_evaluated_only_on_the_machine_its_model_was_built_on(tmp
     orch.eval_machine()
     built_on(orch, s1, EVAL)
     built_on(orch, s2, EVAL)
-    orch.evaluate()                                      # the base on eval; eval-2 holds neither model: it waits
-    assert set(orch._eval_jobs()) == {f"base:{BASE}"} and orch._eval_load("eval-2") == 0
-    orch.eval_machine()                                  # eval holds both waiting models: it stays
-    assert orch.d.fleet.get(EVAL)
-    assert min(orch._eval_ready(), key=orch._eval_load) == "eval-2"   # the next admission goes to the shorter queue
-
+    admitted_digest = orch.db.sub(s2)["record"]["model_digest"]
+    orch.evaluate()          # the base on eval; eval-2 holds neither model: it builds the first one and evaluates it
+    jobs = orch._eval_jobs()
+    assert jobs[f"base:{BASE}"]["machine"] == EVAL and jobs[s1]["machine"] == "eval-2"
+    r = orch.db.sub(s1)["record"]
+    assert r["built_on"] == [orch._machine_id("eval-2")] and r["admitted_digest"] == admitted_digest
+    orch.evaluate()          # both done: s2 goes where its model is (eval), nothing rebuilt
+    assert orch._eval_jobs()[s2]["machine"] == EVAL and "admitted_digest" not in orch.db.sub(s2)["record"]
 
 def test_a_run_whose_gpus_fail_ends_with_its_upload_or_runs_again(tmp_path):
     orch, chain, clock, pub = make(tmp_path)
