@@ -45,6 +45,9 @@ def check(a):
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
         ref = json.loads((out / "edit.json").read_text()).get("parent") if (out / "edit.json").exists() else None
         name = Path(ref).parent.as_posix() if ref else None      # "parent" or "champion": the start it stacks on
+        if name and name not in ("parent", "champion"):        # what admission accepts, nothing else
+            raise SystemExit(f'edit.json parent must be "parent/edit.json" or "champion/edit.json" (the bundle\'s '
+                             f'parent/edit/ or champion/edit/, kept under that name), not {ref!r}')
         if name and not (out / name).exists():   # uploads only reference the published start
             parent = Path(a.parent) if a.parent else task_path.parent / name / "edit"
             if not (parent / "edit.json").exists():

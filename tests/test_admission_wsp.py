@@ -96,3 +96,4 @@ def test_axonry_check_builds_a_stacked_upload_on_the_bundles_parent(tmp_path, ba
     args = ["check", str(up), "--task", str(tmp_path / "task.json"), "--base-dir", str(base)]
     assert sandbox_tools.main(args) == 0
     assert not (up / "parent").exists()                     # the upload itself is left as it is
+
