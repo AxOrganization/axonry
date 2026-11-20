@@ -44,7 +44,7 @@ def test_the_agent_cost_cap():
     b.status = RunStatus(True, T0, usd=7.9)
     assert supervisor.step(T0 + 600, TASK, None, b, st, False) == "running" and b.sent == []
     b.status = RunStatus(True, T0 + 600, usd=8.0)                      # 80%: one reminder to upload
-    assert supervisor.step(T0 + 660, TASK, None, b, st, False) == "running" and "upload" in b.sent[0]
+    assert supervisor.step(T0 + 660, TASK, None, b, st, False) == "running" and "the run stops" in b.sent[0]
     assert supervisor.step(T0 + 720, TASK, None, b, st, False) == "running" and len(b.sent) == 1
     b.status = RunStatus(True, T0 + 700, usd=10.0)                     # 100%: stopped, collected like a deadline
     assert supervisor.step(T0 + 780, TASK, None, b, st, False) == "budget" and b.stopped and st["usd"] == 10.0
@@ -74,7 +74,7 @@ def test_reminders_before_the_deadline_and_finishing_when_the_agent_says_so():
     supervisor.step(dl - 30 * 60, TASK, None, b, st, True)
     supervisor.step(dl - 20 * 60, TASK, None, b, st, True)
     supervisor.step(dl - 10 * 60, TASK, None, b, st, True)
-    assert len(b.sent) == 2 and all("Stop all other work" in m for m in b.sent)       # 30 and 10 minutes before
+    assert len(b.sent) == 2 and all("min left until the deadline" in m for m in b.sent)       # 30 and 10 minutes before
     b.status = RunStatus(False, T0)                                   # idle with an upload: it goes on
     assert supervisor.step(dl - 9 * 60, TASK, None, b, st, True) == "running" and not b.stopped
     assert supervisor.step(dl - 7 * 60, TASK, None, b, st, True, done=True) == "finished" and b.stopped

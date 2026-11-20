@@ -171,15 +171,13 @@ def continue_message(task: dict, now: int) -> str:
 
 def wrap_message(task: dict, now: int) -> str:
     left = max(task["run"]["deadline"] - now, 0)
-    return (f"{left // 60} minutes left until the deadline. Stop all other work now: run axonry-check (--task task.json) "
-            "on your best result and upload it (python -m wsp.upload ... --task task.json) with an up-to-date REPORT.md. "
-            "An upload still in progress at the deadline does not count.")
+    return (f"Automatic message: {left // 60} min left until the deadline ({_fmt_ts(task['run']['deadline'])}). Only the "
+            "last complete upload before the deadline counts; an upload still in progress at the deadline does not.")
 
 
 def budget_message(task: dict, usd: float) -> str:
-    return (f"This run's agent has used {usd:.2f} of its {task['run']['max_agent_usd']} USD. Stop exploring: run "
-            "axonry-check (--task task.json) on your best result and upload it now (python -m wsp.upload ... --task task.json); the run "
-            "stops when the budget is used up.")
+    cap = task["run"]["max_agent_usd"]
+    return f"Automatic message: the agent has used {usd:.2f} of its {cap} USD budget; at {cap} USD the run stops."
 
 
 def task_json(task: dict) -> bytes:
