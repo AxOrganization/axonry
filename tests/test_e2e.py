@@ -860,11 +860,12 @@ def test_a_failed_start_keeps_the_machine(tmp_path):
     chain.head = 101
     open_rules(orch, 101)
     sid, real = "0000000101-0001", orch.d.runner.prepare
+    orch.db.set(f"backoff:{sid}:n", 7)                  # retried often before (no credit to rent): not this machine's
     orch.d.runner.prepare = lambda *a: (_ for _ in ()).throw(RuntimeError("arbos relay unreachable"))
     orch.schedule()
     assert orch.db.sub(sid)["status"] == "QUEUED" and orch.d.fleet.get(sid)["state"] == "ready"   # kept
     orch.d.runner.prepare = real
-    clock.t += 120
+    clock.t += 3600
     orch.schedule()
     assert orch.db.sub(sid)["status"] == "RUNNING" and orch.d.fleet.released == []
 

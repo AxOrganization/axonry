@@ -496,13 +496,17 @@ class Orchestrator:
                 self._backoff(s, "machine setup failed")
             if state != "ready":
                 continue
+            fails = f"provision_fails:{sid}"     # on this machine (not the entry's other retries, e.g. renting)
             try:
                 self._provision(s, rules)
                 self._recovered(s)
+                self.db.set(fails, None)
             except Exception as e:  # ours: retried on the same machine (starting a run is repeatable); a machine
                 log.exception("provision %s failed", sid)       # that fails it three times in a row is replaced
                 self._backoff(s, f"provision: {e}")
-                if self.db.get(f"backoff:{sid}:n", 0) >= 3:
+                self.db.set(fails, (self.db.get(fails) or 0) + 1)
+                if self.db.get(fails) >= 3:
+                    self.db.set(fails, None)
                     self.d.fleet.release(sid, f"provision failed: {e}"[:300])
 
     def _run_lost(self, s, why):
