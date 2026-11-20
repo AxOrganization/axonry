@@ -7,8 +7,10 @@ request, so the GPUs stay full and no benchmark waits for another's long tail. P
 (wsp.common.stable_seed: item id, sample, salt) and grading are the toolkit's own, so a model is paired with every
 other model of the same base item by item.
 
-Each graded answer is appended to <out>/<key>.part.jsonl at once; a rerun skips what is there. A benchmark's file
-becomes <out>/<key>.jsonl when it is complete. Exit codes: 0 done; 3 the frozen item set does not match (ours, never
+Each graded answer is appended to <out>/<key>.part.jsonl at once; a rerun skips what is there (and grades again what
+is there, so every row is graded by this code). A benchmark's file becomes <out>/<key>.jsonl when it is complete.
+Grading runs in the main thread only: the toolkit's math check (math_verify) times itself out with signal.alarm, which
+fails in any other thread - the answer would be marked wrong. Exit codes: 0 done; 3 the frozen item set does not match (ours, never
 the model's); anything else: the run failed.
 
   python3 -m axonry.evaluation.eval_remote --model DIR --profile BASE_ID --salt S --out DIR --gpus N
@@ -19,7 +21,6 @@ import json
 import resource
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -52,6 +53,20 @@ def read_done(part: Path) -> dict:
     return {(str(r["id"]), r["k"]): r for r in rows}
 
 
+def graded(grade, r, text, finish) -> dict:
+    try:
+        return grade(r, text, finish)
+    except Exception as e:  # noqa: BLE001 - an answer the grader cannot read is wrong, never a failed run
+        return {"pred": None, "correct": False, "cut": finish == "length", "kind": "grade_error",
+                "grade_error": f"{type(e).__name__}: {e}"[:300]}
+
+
+def regrade(row, r, grade) -> dict:
+    """A stored row graded again by this code (its answer text is kept)."""
+    keep = {k: row[k] for k in ("id", "k", "source", "gold", "n_tokens", "finish")}
+    return {**keep, **graded(grade, r, row["text"], row["finish"]), "text": row["text"]}
+
+
 def run_stream(reqs, send, grade, out: Path, concurrency: int):
     """Keep `concurrency` requests in flight over the whole stream; write each graded row as it lands; finalize every
     benchmark whose rows are all there. send(prompt, seed) -> (text, finish_reason, n_tokens)."""
@@ -59,22 +74,27 @@ def run_stream(reqs, send, grade, out: Path, concurrency: int):
     keys = list(dict.fromkeys(q[0] for q in reqs))
     final = {key for key in keys if (out / f"{key}.jsonl").exists()}       # finished by an earlier run
     done = {key: read_done(out / f"{key}.part.jsonl") for key in keys if key not in final}
+    items = {(q[0], str(q[1]["id"])): q[1] for q in reqs}
+    for key in keys:                                                       # rows of an earlier run: graded again
+        path = out / (f"{key}.jsonl" if key in final else f"{key}.part.jsonl")
+        if path.exists():
+            rows = [regrade(r, items[(key, str(r["id"]))], grade) for r in read_done(path).values()]
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            if key in done:
+                done[key] = {(str(r["id"]), r["k"]): r for r in rows}
     todo = [q for q in reqs if q[0] not in final and (str(q[1]["id"]), q[2]) not in done[q[0]]]
-    lock, files = threading.Lock(), {key: open(out / f"{key}.part.jsonl", "a") for key in done}
+    files = {key: open(out / f"{key}.part.jsonl", "a") for key in done}
 
-    def one(q):
-        key, r, k, prompt, seed = q
-        text, finish, ntok = send(prompt, seed)
-        try:
-            g = grade(r, text, finish)
-        except Exception as e:  # noqa: BLE001 - an answer the grader cannot read is wrong, never a failed run
-            g = {"pred": None, "correct": False, "cut": finish == "length", "kind": "grade_error",
-                 "grade_error": f"{type(e).__name__}: {e}"[:300]}
+    def one(q):                         # in a worker thread: the answer only
+        return q, send(q[3], q[4])
+
+    def write(q, answer):               # in the main thread: grading (see the module doc)
+        key, r, k = q[0], q[1], q[2]
+        text, finish, ntok = answer
         row = {"id": r["id"], "k": k, "source": r.get("source"), "gold": r.get("answer"), "n_tokens": ntok,
-               "finish": finish, **g, "text": text}
-        with lock:
-            files[key].write(json.dumps(row) + "\n")
-            files[key].flush()
+               "finish": finish, **graded(grade, r, text, finish), "text": text}
+        files[key].write(json.dumps(row) + "\n")
+        files[key].flush()
         return ntok
 
     t0, ntok, it = time.time(), 0, iter(todo)
@@ -83,7 +103,7 @@ def run_stream(reqs, send, grade, out: Path, concurrency: int):
         while running:
             finished, running = wait(running, return_when=FIRST_COMPLETED)
             for f in finished:
-                ntok += f.result()            # a failed request fails the run (rerun resumes)
+                ntok += write(*f.result())    # a failed request fails the run (rerun resumes)
                 q = next(it, None)
                 if q is not None:
                     running.add(pool.submit(one, q))

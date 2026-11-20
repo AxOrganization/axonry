@@ -85,3 +85,21 @@ def test_a_finished_benchmark_is_not_run_again(tmp_path):
     run_stream(reqs(), lambda p, s: (sent.append(p), ("x no", "stop", 1))[1], grade, tmp_path, concurrency=2)
     assert sent == [] and (tmp_path / "a@1.jsonl").read_text() == before
     assert not list(tmp_path.glob("*.part.jsonl"))
+
+
+def test_grading_runs_in_the_main_thread_and_rows_of_an_earlier_run_are_graded_again(tmp_path):
+    seen = set()
+
+    def main_only(r, text, finish):     # as math_verify's signal.alarm: fails outside the main thread
+        seen.add(threading.current_thread() is threading.main_thread())
+        return {"correct": text.endswith("ok") and threading.current_thread() is threading.main_thread()}
+
+    run_stream(reqs(), lambda p, s: ("x ok", "stop", 1), main_only, tmp_path, concurrency=3)
+    assert seen == {True}
+    rows = [json.loads(x) for x in (tmp_path / "a@1.jsonl").read_text().splitlines()]
+    assert all(r["correct"] for r in rows) and all(r["text"] == "x ok" for r in rows)
+    old = (tmp_path / "b@1.jsonl").read_text().replace('"correct": true', '"correct": false')
+    (tmp_path / "b@1.jsonl").write_text(old)                  # graded by an earlier, wrong grader
+    run_stream(reqs(), lambda p, s: ("x no", "stop", 1), main_only, tmp_path, concurrency=3)
+    rows = [json.loads(x) for x in (tmp_path / "b@1.jsonl").read_text().splitlines()]
+    assert len(rows) == 4 and all(r["correct"] for r in rows)

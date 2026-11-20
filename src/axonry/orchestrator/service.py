@@ -1010,12 +1010,14 @@ class Orchestrator:
         if not set(rules.benchmark_keys()) <= set(res):
             return
         try:
-            publisher.publish_score(self.d.public, model_id, {
-                "base": rules["base"], "rules_sha256": rules.sha256, "generated": self._generated(rules),
-                "benchmarks": {k: {"acc": round(judge.accuracy(res[k]), 4), "n": len(res[k])}
-                               for k in rules.benchmark_keys()}})
+            publisher.publish_score(self.d.public, model_id, self.base_score(rules, res))
         except ImmutableObjectError:
             log.info("%s: score.json already published under earlier rules", model_id)
+
+    def base_score(self, rules, res):
+        return {"base": rules["base"], "rules_sha256": rules.sha256, "generated": self._generated(rules),
+                "benchmarks": {k: {"acc": round(judge.accuracy(res[k]), 4), "n": len(res[k])}
+                               for k in rules.benchmark_keys()}}
 
     # ------------------------------------------------------------------------------------------- decide
     def decide(self):
@@ -1046,13 +1048,30 @@ class Orchestrator:
         """One match: the submission against the champion of this moment only (the base model while its line has no
         champion yet)."""
         sid, rec, base = s["sid"], s["record"], s["base"]
-        rules = self.rules_for(sid)
-        params = {k: rules.judge_params(k) for k in rules.benchmark_keys()}
         head = self.d.chain.finalized_head()
         champ = self.db.champion(base)
         ref_id = champ["sid"] if champ else f"base:{base}"
-        ref = self.db.results(ref_id)
-        mine = self.db.results(sid)
+        score, record = self.match(s, ref_id, head, self.db.results(sid), self.db.results(ref_id))
+        cmp = {"dominates": score["dominates_champion"], "wins": score["wins"], "tie_all": score["tie_all"]}
+        decision = score["decision"]
+        publisher.publish_score(self.d.public, sid, score)
+        self.db.update(sid, "PUBLISHED", reason_code=decision, decided_at=self.d.clock(), record_patch={
+            **record, "timeline": {**rec["timeline"], "decided": self.now()}})
+        self._publish_record(sid)
+        if cmp["dominates"]:
+            self.db.add_champion(base, sid, s["hotkey"], head, {"reference": ref_id, "wins": cmp["wins"]})
+        self._close_pr(sid, f"axonry: submission `{sid}` -> **{decision}** ({cmp['wins']} wins, not worse on all: "
+                            f"{cmp['tie_all']}). Details: `axonry-miner board {sid}`.",
+                       (rec.get("pr") or {}).get("locked_commit") if cmp["dominates"] else None)
+        self._publish_line(base)
+        if cmp["dominates"]:
+            self.publish_weights()
+
+    def match(self, s, ref_id, head, mine, ref):
+        """One match on these results -> (its score.json, the record's decision fields)."""
+        sid, rec, base = s["sid"], s["record"], s["base"]
+        rules = self.rules_for(sid)
+        params = {k: rules.judge_params(k) for k in rules.benchmark_keys()}
         cmp = judge.compare(mine, ref, params, rules["judge"])
         benches = {}
         for k in params:
@@ -1066,26 +1085,15 @@ class Orchestrator:
                                           "win_at": round(ref_acc + rules["judge"]["z_win"] * c["se"]
                                                           + params[k]["delta_win"], 4)}}
         decision = "NEW_CHAMPION" if cmp["dominates"] else "NOT_DOMINATING"
-        publisher.publish_score(self.d.public, sid, {
-            "base": base, "rules_sha256": rules.sha256, "model_digest": rec.get("model_digest"),
-            "judge": rules["judge"], "generated": self._generated(rules), "benchmarks": benches,
-            "wins": cmp["wins"], "tie_all": cmp["tie_all"],
-            "dominates_champion": cmp["dominates"], "decision": decision, "decided_block": head})
-        self.db.update(sid, "PUBLISHED", reason_code=decision, decided_at=self.d.clock(), record_patch={
+        score = {"base": base, "rules_sha256": rules.sha256, "model_digest": rec.get("model_digest"),
+                 "judge": rules["judge"], "generated": self._generated(rules), "benchmarks": benches,
+                 "wins": cmp["wins"], "tie_all": cmp["tie_all"],
+                 "dominates_champion": cmp["dominates"], "decision": decision, "decided_block": head}
+        return score, {
             "decision": decision, "wins": cmp["wins"], "reference": ref_id,
             "scores": {k: [b["acc"], b["vs_champion"]["tie_at"], b["vs_champion"]["win_at"],
                            "win" if b["vs_champion"]["win"] else "tie" if b["vs_champion"]["tie_ok"] else "lose"]
-                       for k, b in benches.items()},
-            "timeline": {**rec["timeline"], "decided": self.now()}})
-        self._publish_record(sid)
-        if cmp["dominates"]:
-            self.db.add_champion(base, sid, s["hotkey"], head, {"reference": ref_id, "wins": cmp["wins"]})
-        self._close_pr(sid, f"axonry: submission `{sid}` -> **{decision}** ({cmp['wins']} wins, not worse on all: "
-                            f"{cmp['tie_all']}). Details: `axonry-miner board {sid}`.",
-                       (rec.get("pr") or {}).get("locked_commit") if cmp["dominates"] else None)
-        self._publish_line(base)
-        if cmp["dominates"]:
-            self.publish_weights()
+                       for k, b in benches.items()}}
 
     def disqualify(self, sid, reason):
         """The owner's public ruling on a run that broke the rules the checks cannot see (e.g. its published agent log
