@@ -287,6 +287,9 @@ class FakeExecutor:
 
     def admit(self, on, sid, spec_dir, base_doc):
         self.built.add((on, sid))
+        extra = [p for p in Path(spec_dir).rglob("*") if p.is_file() and p.name not in ("edit.json", "edit.npz",
+                                                                                         "REPORT.md")]
+        assert not extra, extra                         # as admit_remote's static check: upload files only
         spec = json.loads((spec_dir / "edit.json").read_text())
         ref = spec.get("parent", "@")
         if ref.endswith(".json"):                       # an earlier form: a path to the spec it stacks on
@@ -1826,13 +1829,16 @@ def test_a_champion_is_archived_as_one_edit_on_the_base_with_its_lineage(tmp_pat
     flat_dir = tmp_path / "flat"
     orch._materialize_chain(se, flat_dir)                     # one edit on the base, however long its chain
     assert not (flat_dir / sa).exists() and json.loads((flat_dir / "edit.json").read_text())["parent"].startswith("Qwen/")
-    pay(orch, chain, "B", 120, 1)                             # a run on the archived champion: lineage and report
+    sc = "0000000120-0001"
+    orch.d.runner.start_on[sc] = "champion"                   # a run on the archived champion
+    pay(orch, chain, "C", 120, 1)
     chain.head = 120
     orch.intake()
     run_until_quiet(orch, clock, rounds=6)
-    names, _ = orch.d.runner.bundles["0000000120-0001"]
+    names, _ = orch.d.runner.bundles[sc]                      # its bundle: the one edit, its lineage and report
     assert {f"{se}/edit/edit.json", f"{se}/edit/FLAT.json", f"{se}/edit/REPORT.md"} <= set(names)
     assert not any(n.startswith(f"{se}/edit/{sa}/") for n in names)
+    assert orch.db.sub(sc)["record"]["parent"] == se and orch.db.sub(sc)["status"] == "PUBLISHED"   # admitted on it
 
 
 def test_archiving_stops_when_the_model_is_gone(tmp_path):
