@@ -93,7 +93,7 @@ own rule: choices on dev sets, holdout only to confirm a frozen edit.
 
 ## Machine (one sandbox, exclusive to you until the deadline)
 - Connect once with `bash ssh/install.sh` (from this bundle), then always `ssh -F ~/.axonry/ssh/config sandbox`
-  (also `scp -F ~/.axonry/ssh/config file sandbox:/workspace/work/`, `rsync -e "ssh -F ~/.axonry/ssh/config"`).
+  (also `scp -F ~/.axonry/ssh/config file sandbox:/workspace/work/`).
   Host keys are pinned.
 - GPU: {gpus}; CPUs: {res.get('cpus')}; memory: {res.get('memory')}; free disk: {res.get('disk_gib')} GiB.
 - Base model (read-only): `{res.get('base_path')}`; competition toolkit (read-only): `{res.get('competition_repo')}`;

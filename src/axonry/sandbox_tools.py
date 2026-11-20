@@ -42,6 +42,10 @@ def check(a):
     if not task_path.exists():
         raise SystemExit(f"{task_path} not found: copy the bundle's task.json here or pass --task")
     task, out = json.loads(task_path.read_text()), Path(a.out_dir)
+    if not (out / "edit.json").is_file():
+        raise SystemExit(f"{out}: give the upload's edit/ directory (the one holding edit.json)")
+    if not (out / "edit.json").is_file():
+        raise SystemExit(f"{out}: give the upload's edit/ directory (the one holding edit.json)")
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
         ref = json.loads((out / "edit.json").read_text()).get("parent") if (out / "edit.json").exists() else None
         name = Path(ref).parent.as_posix() if ref else None      # "parent" or "champion": the start it stacks on
