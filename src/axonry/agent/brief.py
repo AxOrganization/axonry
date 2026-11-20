@@ -45,13 +45,10 @@ def _judged(task) -> str:
     j = task.get("judge")
     if not j:
         return ""
-    if j["champion"]:
-        ref = f"the champion `{j['champion']}`"
-    else:
-        ref = "the base model (no champion yet)"
+    now = f"now `{j['champion']}`" if j["champion"] else "none yet: the base model"
     return f"""
 ## How the edit is judged
-Against {ref}, on the benchmarks: the edit must be worse on none of them (beyond their noise) and clearly better on at least {j['n_win']}.
+Against the champion when it is judged ({now}), on the benchmarks: the edit must be worse on none of them (beyond their noise) and clearly better on at least {j['n_win']}.
 """
 
 
@@ -87,17 +84,16 @@ own rule: choices on dev sets, holdout only to confirm a frozen edit.
 - Reminders {' and '.join(f"{m} min" for m in run['wrap_minutes'])} before the deadline: then stop all other work and upload
   your best result. `axonry-time` in the sandbox prints the time left.
 - One background job of yours lasts at most 60 minutes; you are then asked to continue from the sandbox's PROGRESS.md.
-  Nobody answers questions during the run: carry on with what is left yourself, never ask whether to. Run long GPU
-  work detached in the sandbox (`tmux` or `nohup`), so it keeps running when a job ends, and check on it later.{budget}
+  Nobody answers questions during the run: carry on with what is left yourself, never ask whether to.{budget}
 - Upload an intermediate result early and re-upload improvements: the last complete upload before the deadline counts.
   An upload still in progress at the deadline does not count, and may spoil the one before it.
-- Finished early (a complete result uploaded, nothing left worth trying)? Run `axonry-done` in the sandbox: the run
-  ends then, and its GPU time is charged only up to that moment.
+- Finished early (nothing left worth trying, a result uploaded or none worth uploading)? Run `axonry-done` in the
+  sandbox: the run ends then, with its last complete upload if any, and its GPU time is charged only up to that moment.
 
 ## Machine (one sandbox, exclusive to you until the deadline)
 - Connect once with `bash ssh/install.sh` (from this bundle), then always `ssh -F ~/.axonry/ssh/config sandbox`
   (also `scp -F ~/.axonry/ssh/config file sandbox:/workspace/work/`, `rsync -e "ssh -F ~/.axonry/ssh/config"`).
-  Host keys are pinned; use `tmux` inside the sandbox for long jobs so a dropped connection does not kill them.
+  Host keys are pinned.
 - GPU: {gpus}; CPUs: {res.get('cpus')}; memory: {res.get('memory')}; free disk: {res.get('disk_gib')} GiB.
 - Base model (read-only): `{res.get('base_path')}`; competition toolkit (read-only): `{res.get('competition_repo')}`;
   your writable space: `{res.get('work_path')}`.

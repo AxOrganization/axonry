@@ -157,7 +157,7 @@ class FakeGitHub:
 class FakeFleet:
     """Rented machines, ready at once; `lose` makes vast drop one."""
     def __init__(self, db):
-        self.db, self.lost, self.released, self.done = db, set(), [], set()
+        self.db, self.lost, self.released, self.done, self.gpu_fault = db, set(), [], set(), set()
 
     def get(self, purpose):
         return next((m for m in self.db.machines() if m["name"] == purpose), None)
@@ -202,7 +202,9 @@ class FakeFleet:
 
     def sample(self, purpose):
         return {"gpus": [{"util_pct": 97, "mem_used_mib": 20000, "mem_total_mib": 24564}] * 4,
-                "note": "Screening directions on 203.0.113.7; best so far +2.1", "done": purpose in self.done}
+                "note": "Screening directions on 203.0.113.7; best so far +2.1", "done": purpose in self.done,
+                **({"gpus": None, "gpu_fault": "Unable to determine the device handle: Unknown Error"}
+                   if purpose in self.gpu_fault else {})}
 
 
 class FakeRunner:
@@ -703,7 +705,7 @@ def test_stacking_on_a_published_parent(tmp_path):
     se = "0000000110-0001"
     assert orch.d.runner.saw_parent[se]                       # the parent's edit was in the bundle
     names, text = orch.d.runner.bundles[se]                   # the champion is its parent: told, not shipped twice
-    assert not any(n.startswith("champion/") for n in names) and f"Against the champion `{sa}`," in text
+    assert not any(n.startswith("champion/") for n in names) and f"(now `{sa}`)," in text
     assert orch.db.sub(se)["record"]["parent"] == sa
     assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION"   # judged against the champion (its parent)
     assert pub.get(layout.submission_edit_prefix(se) + "edit.json")
@@ -1627,7 +1629,7 @@ def test_a_run_is_told_the_champion_it_must_beat_and_gets_its_edit(tmp_path):
     run_until_quiet(orch, clock, rounds=2)
     names, text = orch.d.runner.bundles["0000000110-0001"]
     assert "champion/edit/edit.json" in names and not any(n.startswith("parent/") for n in names)
-    assert f"Against the champion `{sa}`," in text and "clearly better on at least 2" in text
+    assert f"(now `{sa}`)," in text and "clearly better on at least 2" in text
 
 
 def test_a_parent_can_be_the_champion_when_the_run_starts(tmp_path):
@@ -1702,3 +1704,31 @@ def test_a_candidate_is_evaluated_only_on_the_machine_its_model_was_built_on(tmp
     orch.eval_machine()                                  # eval holds both waiting models: it stays
     assert orch.d.fleet.get(EVAL)
     assert min(orch._eval_ready(), key=orch._eval_load) == "eval-2"   # the next admission goes to the shorter queue
+
+
+def test_a_run_whose_gpus_fail_ends_with_its_upload_or_runs_again(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.max_concurrent = 2
+    for n, (name, block) in enumerate((("A", 101), ("B", 102))):
+        v = blobs_for(name)
+        commit(chain, name, v, block)
+        deposit(chain, name, block, 2 * FEE)
+        orch.d.github.add_pr(n + 1, HOTKEYS[name], f"{name.lower()}1", v)
+    chain.head = 102
+    open_rules(orch, 101)
+    sa, sb = "0000000101-0001", "0000000102-0001"
+    orch.schedule()
+    assert orch.db.sub(sa)["status"] == orch.db.sub(sb)["status"] == "RUNNING"
+    orch.d.private.delete_prefix(f"staging/{sb}/")      # B has uploaded nothing
+    orch.d.fleet.gpu_fault |= {sa, sb}
+    orch.supervise()
+    clock.t += 9 * 60
+    orch.supervise()                                     # 9 min: still waited for
+    assert orch.db.sub(sa)["status"] == orch.db.sub(sb)["status"] == "RUNNING"
+    clock.t += 60
+    orch.supervise()                                     # 10 min: A ends with its upload, B runs again elsewhere
+    assert orch.db.sub(sa)["status"] == "COLLECTING"
+    assert orch.db.sub(sb)["status"] == "QUEUED" and orch.db.charged(sb) == {}
+    assert sa in orch.d.fleet.released and sb in orch.d.fleet.released
+    gone = [m for m in orch.db.machines(states=("gone",)) if m["name"] in (sa, sb)]
+    assert len(gone) == 2 and all(m["note"].startswith("failed: its GPUs failed") for m in gone)   # hosts not again

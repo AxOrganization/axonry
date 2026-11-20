@@ -215,7 +215,7 @@ def test_sample_parses_gpus_status_line_and_done(monkeypatch):
             if command.startswith("timeout -k 2 55 nvidia-smi"):
                 if isinstance(gpus, Exception):
                     raise gpus
-                return gpus
+                return gpus if "rc=" in gpus else gpus + "rc=0\n"
             return rest
         return ssh
     status = "---\n\n# Status: " + " ".join(f"w{i}" for i in range(30)) + "\nmore\n"
@@ -233,6 +233,13 @@ def test_sample_parses_gpus_status_line_and_done(monkeypatch):
     monkeypatch.setattr(machine, "ssh", remote(MachineError("`nvidia-smi` timed out"), "done\n---\nstill here\n"))
     got = machine.sample(None, None)                     # a sick GPU hangs nvidia-smi: the done flag still comes
     assert got["gpus"] is None and got["done"] is True and got["note"] == "still here"
+    assert got["gpu_fault"] is None                      # unread is not a fault
+    monkeypatch.setattr(machine, "ssh", remote("rc=124\n", "---\n"))
+    assert machine.sample(None, None)["gpu_fault"] is None   # timed out: slow, not failed
+    monkeypatch.setattr(machine, "ssh", remote("Unable to determine the device handle for GPU0: Unknown Error\nrc=255\n",
+                                              "---\n"))
+    got = machine.sample(None, None)                     # it answered and failed: the GPUs are gone
+    assert got["gpus"] is None and "Unknown Error" in got["gpu_fault"]
 
 
 def test_offers_leave_out_hosts_vast_deverified():

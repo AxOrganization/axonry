@@ -58,7 +58,8 @@ from .db import DB
 log = logging.getLogger("axonry")
 REVIEW_FEE, REVIEW_FEE_BACK = -2, -3      # charge numbers (db.charge)
 SLOW_STEP_S = 5
-VANISH_GRACE_S = 10 * 60      # a machine vast reports gone this long (not one reading: its status flickers) is lost                           # a tick step taking longer is logged
+VANISH_GRACE_S = 10 * 60
+GPU_FAULT_S = 10 * 60         # nvidia-smi failing this long on a run's machine: its GPUs are gone      # a machine vast reports gone this long (not one reading: its status flickers) is lost                           # a tick step taking longer is logged
 
 
 def _utc(ts) -> str:
@@ -613,14 +614,31 @@ class Orchestrator:
             task, h, st = r["task"], RunHandle(**r["handle"]), r["sup_state"] or {}
             has_upload = self.d.private.last_modified(layout.staging_prefix(sid) + "manifest.json") is not None
             st["live"] = self._sample(sid, samples.get(sid), st.get("live"))
-            try:
-                outcome = supervisor.step(self.now(), task, h, self.d.runner, st, has_upload, st["live"].get("done"),
-                                          polls.get(sid))
-            except Exception as e:  # agent backend / network hiccup: retried next tick, forced stop at the deadline
-                log.warning("supervise %s: %s (retrying next tick)", sid, str(e).splitlines()[0][:200])
-                if self.now() < task["run"]["deadline"]:
+            fault, gone_note = st["live"].pop("gpu_fault", None), "released"
+            if fault:
+                st.setdefault("gpu_fault_since", self.now())
+            elif isinstance(samples.get(sid), dict) and samples[sid].get("gpus"):   # read fine: healthy again
+                st.pop("gpu_fault_since", None)
+            if fault and self.now() - st["gpu_fault_since"] >= GPU_FAULT_S:
+                log.warning("%s: its GPUs failed for %d min: %s", sid, GPU_FAULT_S // 60, fault)
+                if not has_upload:            # nothing to keep: again on another machine (this host not again)
+                    self.db.save_run(sid, sup_state=st)
+                    self._run_lost(s, f"failed: its GPUs failed ({fault})"[:300])
                     continue
-                outcome = "finished"
+                try:                          # the run cannot go on: it ends with its last complete upload
+                    self.d.runner.stop(h)
+                except Exception:
+                    log.exception("stop the agent of %s", sid)
+                outcome, gone_note = "finished", f"failed: its GPUs failed ({fault})"[:300]   # host not again
+            else:
+                try:
+                    outcome = supervisor.step(self.now(), task, h, self.d.runner, st, has_upload,
+                                              st["live"].get("done"), polls.get(sid))
+                except Exception as e:  # agent backend / network hiccup: retried next tick, forced stop at the deadline
+                    log.warning("supervise %s: %s (retrying next tick)", sid, str(e).splitlines()[0][:200])
+                    if self.now() < task["run"]["deadline"]:
+                        continue
+                    outcome = "finished"
             self.db.save_run(sid, sup_state=st)
             if outcome == "running":
                 continue
@@ -637,7 +655,7 @@ class Orchestrator:
                 log.exception("export %s", sid)
                 exported = False
             try:
-                self.d.fleet.release(sid)
+                self.d.fleet.release(sid, gone_note)
             except Exception:
                 log.exception("release the machine of %s (retried by schedule)", sid)
             end = self.now()

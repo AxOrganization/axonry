@@ -129,21 +129,29 @@ def _number(field: str) -> int | None:
 
 def sample(m: Machine, key) -> dict:
     """A run's machine at a glance: each GPU's use and the agent's one-line status (the first line of its PROGRESS.md,
-    at most 20 words; None before it writes one), both public (gpus None when unread); done: the agent ran axonry-done. The GPUs are read
+    at most 20 words; None before it writes one), both public (gpus None when unread); done: the agent ran axonry-done;
+    gpu_fault: what nvidia-smi said when it failed (not a timeout: some hosts are slow), else None. The GPUs are read
     apart: a sick GPU can hang nvidia-smi, and must never hide the rest (the done flag above all)."""
     out = ssh(m, key, "test -f /workspace/work/DONE && echo done; echo ---;"
               " head -c 2000 /workspace/work/PROGRESS.md 2>/dev/null || true", timeout=20, attempts=1)
     flag, _, progress = out.partition("---\n")
+    gpus, fault = None, None   # unread: the caller keeps the last reading
     try:   # some hosts take ~25 s to answer nvidia-smi
-        gpus_out = ssh(m, key, "timeout -k 2 55 nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total "
-                       "--format=csv,noheader,nounits", timeout=60, attempts=1)
-        gpus = [dict(zip(("util_pct", "mem_used_mib", "mem_total_mib"), map(_number, line.split(","))))
-                for line in gpus_out.splitlines() if line.strip()]
+        out_g = ssh(m, key, "timeout -k 2 55 nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total "
+                    "--format=csv,noheader,nounits 2>&1; echo rc=$?", timeout=60, attempts=1)
+        lines = [x for x in out_g.splitlines() if x.strip()]
+        rc = lines.pop()[3:] if lines and lines[-1].startswith("rc=") else ""
+        if rc == "0":
+            gpus = [dict(zip(("util_pct", "mem_used_mib", "mem_total_mib"), map(_number, line.split(","))))
+                    for line in lines]
+        elif rc not in ("124", "137"):                 # it answered, and failed (e.g. "NVML: Unknown Error")
+            fault = " ".join(" ".join(lines).split())[:200] or f"nvidia-smi exited {rc}"
     except MachineError:
-        gpus = None   # unread: the caller keeps the last reading
+        pass
     line = next((x for x in progress.splitlines() if x.strip()), "")
     line = re.sub(r"^(status:)\s*", "", line.strip().lstrip("#*->` ").strip(), flags=re.I)
-    return {"gpus": gpus, "note": " ".join(line.split()[:20])[:200] or None, "done": flag.strip() == "done"}
+    return {"gpus": gpus, "note": " ".join(line.split()[:20])[:200] or None, "done": flag.strip() == "done",
+            "gpu_fault": fault}
 
 
 def scp(m: Machine, key, srcs, dst: str, timeout=1800, attempts=3):

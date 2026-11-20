@@ -29,7 +29,7 @@ DONE = Path("/workspace/work/DONE")      # read by the organizer (pool.machine.s
 
 def done(_a):
     DONE.write_text(f"{int(time.time())}\n")
-    print("noted: the run ends within a minute, if a complete result is uploaded (otherwise it goes on)")
+    print("noted: the run ends within a minute, with the last complete upload (if any)")
 
 
 def check(a):

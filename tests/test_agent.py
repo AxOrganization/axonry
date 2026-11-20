@@ -77,8 +77,10 @@ def test_reminders_before_the_deadline_and_finishing_when_the_agent_says_so():
     assert len(b.sent) == 2 and all("Stop all other work" in m for m in b.sent)       # 30 and 10 minutes before
     b.status = RunStatus(False, T0)                                   # idle with an upload: it goes on
     assert supervisor.step(dl - 9 * 60, TASK, None, b, st, True) == "running" and not b.stopped
-    assert supervisor.step(dl - 8 * 60, TASK, None, b, st, False, done=True) == "running"   # done, nothing uploaded
     assert supervisor.step(dl - 7 * 60, TASK, None, b, st, True, done=True) == "finished" and b.stopped
+    b2 = Backend()
+    b2.status = RunStatus(False, T0)
+    assert supervisor.step(dl - 7 * 60, TASK, None, b2, {}, False, done=True) == "finished" and b2.stopped  # none
 
 
 def test_the_agent_cost_is_its_projects_use_since_kickoff():

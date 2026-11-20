@@ -6,7 +6,7 @@ runner calls, and keeps its memory in `state` (persisted by the orchestrator), s
 - no activity for stall_minutes: one nudge, then end early;
 - a reminder at each of run.wrap_minutes before the deadline (stop working, upload the result now); stopped at the
   deadline;
-- the agent finishes early by saying so (`axonry-done` in the sandbox) once a complete upload exists;
+- the agent finishes early by saying so (`axonry-done` in the sandbox), with its last complete upload if any;
 - its model use (run.max_agent_usd): a reminder to upload at 80%, stopped at 100%;
 - the backend cannot run it (st.error, e.g. the arbos box is held) for stall_minutes: "lost" (ours: the run is
   started again, nothing charged).
@@ -33,7 +33,7 @@ def step(now: int, task: dict, handle, runner, state: dict, has_upload: bool, do
             return "lost"
         return "running"
     state.pop("error_since", None)
-    if done and has_upload:
+    if done:                     # with its last complete upload, or none (the method found nothing worth it)
         runner.stop(handle)
         return "finished"
     cap = run.get("max_agent_usd")
