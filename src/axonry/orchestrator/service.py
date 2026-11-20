@@ -916,9 +916,12 @@ class Orchestrator:
         last bits, so the new model and digest are the ones evaluated (the admitted digest is kept beside). Ours if it
         fails: logged, tried again next tick."""
         sid = s["sid"]
+        build = Path(self.d.work_dir) / sid / "build"
         try:
-            adm = self.d.executor.admit(on, sid, Path(self.d.work_dir) / sid / "build",
-                                        registry.load_base(rules["base"], self.d.registry_root))
+            if not (build / "edit.json").exists():     # cleaned up (it ended once): its published edit and chain
+                shutil.rmtree(build, ignore_errors=True)
+                self._materialize_chain(sid, build)
+            adm = self.d.executor.admit(on, sid, build, registry.load_base(rules["base"], self.d.registry_root))
             if not adm.get("passed"):
                 raise RuntimeError("; ".join(adm.get("violations") or [])[:300])
         except Exception as e:

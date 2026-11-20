@@ -1734,3 +1734,17 @@ def test_a_run_whose_gpus_fail_ends_with_its_upload_or_runs_again(tmp_path):
     assert sa in orch.d.fleet.released and sb in orch.d.fleet.released
     gone = [m for m in orch.db.machines(states=("gone",)) if m["name"] in (sa, sb)]
     assert len(gone) == 2 and all(m["note"].startswith("failed: its GPUs failed") for m in gone)   # hosts not again
+
+
+def test_a_candidate_whose_build_was_cleaned_is_built_again_from_its_published_edit(tmp_path):
+    import shutil
+    from axonry.common import layout
+    orch, chain, clock, pub = make(tmp_path)
+    orch.d.eval_machines = 2
+    s1, = admitted(orch, 1)
+    orch.eval_machine()
+    build = Path(orch.d.work_dir) / s1 / "build"
+    pub.put(layout.submission_edit_prefix(s1) + "edit.json", (build / "edit.json").read_bytes())   # as admission did
+    shutil.rmtree(Path(orch.d.work_dir) / s1)                 # the janitor took the work directory
+    assert orch._rebuild("eval-2", orch.db.sub(s1), orch.rules_for(s1))
+    assert (build / "edit.json").exists() and ("eval-2", s1) in orch.d.executor.built
