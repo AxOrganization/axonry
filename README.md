@@ -67,8 +67,9 @@ Losing the registration after committing does not stop the entry; it only means 
 deregistered champion's weight is burned until it registers again).
 
 **Fees.** You pay for your run's GPU time and its agent's model use. The published rules give the GPU model, the
-number of GPUs, the maximum run time, the price per GPU-hour and the agent budget, so the most a run can cost is known
-in advance (`axonry-miner price`): every GPU hour up to the deadline plus the agent budget.
+number of GPUs, the maximum run time, the price per GPU-hour, the agent budget and the review fee, so the most an entry
+can cost is known in advance (`axonry-miner price`): every GPU hour up to the deadline, the agent budget and the review
+fee. What an entry pays (these fees and the agent budget) is set by the rules in force, for every entry.
 
 - Fund the account of **the coldkey that owns the hotkey**: transfer alpha of this subnet (the accepted assets
   are in the rules) from that coldkey to the subnet's treasury (`fee.treasury` in the rules), any amount, at any
@@ -78,10 +79,9 @@ in advance (`axonry-miner price`): every GPU hour up to the deadline plus the ag
   (as made by `axonry-miner deposit`), not transfers through a proxy or multisig. The coldkey that owns the hotkey
   at its commitment pays for that entry for good; a hotkey whose owner changed since its registration cannot enter
   (`HOTKEY_MOVED`): a coldkey swap needs no consent from the coldkey it moves into.
-- Your entry is reviewed once the account covers a whole run (the maximum cost above), besides what its other
-  queued or running entries still hold. Going to review costs the review fee (`fee.review_usd` in the rules): if the
-  entry runs, the fee counts towards the run, which costs only what it used; if it never runs, the fee is kept (it
-  is charged once, however often the entry is reviewed).
+- Your entry is reviewed once the account covers the maximum cost above, besides what its other queued or running
+  entries still hold. Going to review costs the review fee (`fee.review_usd` in the rules), which is kept whether or
+  not the entry runs (it is charged once, however often the entry is reviewed).
 - During the run, each full GPU hour is charged as it passes; when the run ends (at the deadline, or when the
   agent says it is done), the GPU time actually used is settled and the agent's model use is charged (never more
   than the agent budget). A run that ends early costs less; what is left stays in the account. The clock

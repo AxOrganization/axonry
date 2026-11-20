@@ -1211,8 +1211,8 @@ def test_the_review_fee_is_kept_when_review_refuses_and_is_part_of_a_run(tmp_pat
     abusive entry); an entry that runs is charged only what its run used, the fee counting towards it. An account
     covering exactly one run still runs after paying it."""
     orch, chain, clock, pub = make(tmp_path)
-    fee = {**RULES["fee"], "assets": ["tao", "alpha"], "review_usd": 20}
-    orch.d.registry_root = registry_copy(tmp_path, fee=fee)
+    fee = {**RULES["fee"], "assets": ["tao", "alpha"], "review_usd": 20, "review_kept": False}
+    orch.d.registry_root = registry_copy(tmp_path, fee=fee, run={**RULES["run"], "max_agent_usd": 100})
     gh = orch.d.github
     gh.approve_all = False
     for n, block in (("A", 101), ("B", 102)):
@@ -1748,3 +1748,26 @@ def test_a_candidate_whose_build_was_cleaned_is_built_again_from_its_published_e
     shutil.rmtree(Path(orch.d.work_dir) / s1)                 # the janitor took the work directory
     assert orch._rebuild("eval-2", orch.db.sub(s1), orch.rules_for(s1))
     assert (build / "edit.json").exists() and ("eval-2", s1) in orch.d.executor.built
+
+
+def test_a_kept_review_fee_is_part_of_the_most_an_entry_costs(tmp_path):
+    """fee.review_kept: the review fee is not given back when the run ends; the most an entry costs is its GPU hours,
+    its agent budget and the fee (here 48 + 80 + 20), and an account covering that runs."""
+    orch, chain, clock, pub = make(tmp_path)
+    fee = {**RULES["fee"], "assets": ["tao", "alpha"], "review_usd": 20, "review_kept": True}
+    orch.d.registry_root = registry_copy(tmp_path, fee=fee, run={**RULES["run"], "max_agent_usd": 80})
+    pay(orch, chain, "B", 102, 1)
+    chain.head = 102
+    open_rules(orch, 100)
+    sid = "0000000102-0001"
+    rules = orch.rules_for(sid)
+    assert pricing.run_cost_musd(rules) == pricing.gpu_max_musd(rules) + 100 * pricing.MUSD    # 80 + 20
+    assert orch.db.sub(sid)["status"] == "QUEUED" and orch.db.charged(sid) == {-2: 20 * pricing.MUSD}
+    orch.schedule()
+    kick = clock.t
+    clock.t = kick + 3600 + 600
+    orch.d.fleet.done.add(sid)
+    orch.supervise()
+    charged = orch.db.charged(sid)
+    assert -3 not in charged and sum(charged.values()) == pricing.used_musd(rules, clock.t - kick) + 20 * pricing.MUSD
+    assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == 0

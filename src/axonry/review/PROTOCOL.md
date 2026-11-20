@@ -31,8 +31,8 @@ A waiting submission goes to review (`REVIEW`) when
   `REJECTED`),
 - and the account of the coldkey that owned the hotkey at its commitment (fixed then; a hotkey whose owner changed
   since its registration is `REJECTED HOTKEY_MOVED` at once; deposits come from that coldkey, each in USD at the
-  price of its block) covers a whole run at its maximum cost, besides what the coldkey's other locked entries hold.
-  Going to review then costs the review fee (`fee.review_usd`): part of its run if it runs, kept if it never runs.
+  price of its block) covers the entry's maximum cost, besides what the coldkey's other locked entries hold.
+  Going to review then costs the review fee (`fee.review_usd`), kept whether or not the entry runs.
 
 So nobody can enter in someone else's name (only the hotkey signs, and the commitment names the GitHub account),
 spend someone else's funds (only the owner's account pays), enter an exact copy, or hold an unseen priority

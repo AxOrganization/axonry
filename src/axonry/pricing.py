@@ -3,7 +3,7 @@
 An account is the sum of a coldkey's deposits to the treasury, each converted to USD at its own moment (TAO/USD at
 the deposit's block time; alpha through the subnet's alpha price at the deposit's block), minus the run charges.
 Before review the account must cover a run's maximum: every GPU hour up to the deadline plus the agent budget
-(run.max_agent_usd). fee.slippage only pads the transfer the miner tool suggests, for the price moving before its
+(run.max_agent_usd), plus the review fee when it is kept (fee.review_kept). fee.slippage only pads the transfer the miner tool suggests, for the price moving before its
 block; it is never required.
 alpha price (TAO per alpha) comes from chain state (exact, reproducible).
 TAO/USD has no on-chain source: median of the external sources that answer (>= 2); refuse when they disagree.
@@ -51,8 +51,14 @@ def agent_max_musd(rules) -> int:
 
 
 def run_cost_musd(rules) -> int:
-    """What a run holds from its account until it ends: its GPU hours and agent budget."""
-    return gpu_max_musd(rules) + agent_max_musd(rules)
+    """The most an entry costs: its GPU hours and agent budget, and its review fee when that is kept (not given back
+    when the run ends). Held from its account until it ends (less what it was charged already)."""
+    return gpu_max_musd(rules) + agent_max_musd(rules) + (review_musd(rules) if review_kept(rules) else 0)
+
+
+def review_kept(rules) -> bool:
+    """fee.review_kept: the review fee is kept whether or not the entry runs (else a run gives it back at its end)."""
+    return bool(rules["fee"].get("review_kept"))
 
 
 def used_musd(rules, seconds: float) -> int:
@@ -61,7 +67,7 @@ def used_musd(rules, seconds: float) -> int:
 
 
 def review_musd(rules) -> int:
-    """fee.review_usd: charged when an entry goes to review; kept if it never runs, otherwise part of its run's cost."""
+    """fee.review_usd: charged when an entry goes to review (kept, or given back when its run ends: review_kept)."""
     return int(round(rules["fee"].get("review_usd", 0) * MUSD))
 
 

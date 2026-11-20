@@ -78,6 +78,9 @@ def cmd_price(r, network):
     print(f"  GPUs     {rules['fee']['usd_per_gpu_hour']} USD per GPU-hour, at most "
           f"{pricing.gpu_max_musd(rules) / pricing.MUSD:.2f} USD")
     print(f"  agent    its model use, at most {run['max_agent_usd']:.2f} USD")
+    if pricing.review_musd(rules):
+        print(f"  review   {pricing.review_musd(rules) / pricing.MUSD:.2f} USD when it goes to review, "
+              + ("kept" if pricing.review_kept(rules) else "given back when it runs"))
     print(f"  held     {top:.2f} USD: your account must hold this before review")
     try:
         usd, note = asset_usd(network, rules)

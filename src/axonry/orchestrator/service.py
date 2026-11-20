@@ -380,7 +380,7 @@ class Orchestrator:
         if short:
             self._set_stage(s, "WAITING", *short)
             return pr.number
-        fee = pricing.review_musd(rules)
+        fee = pricing.review_musd(self._fees(sid))
         if fee and s["hotkey"] != self.d.owner_keypair.ss58_address:   # going to review costs the review fee, once
             self.db.charge(sid, REVIEW_FEE, coldkey, fee)
         refused = s["record"].get("refused") or {}
@@ -407,14 +407,16 @@ class Orchestrator:
             except Exception as e:      # GitHub unreachable: ours, the approval stands, retried next tick
                 log.warning("lock %s: %s (retrying)", sid, e)
                 return pr.number
-            self.db.lock(sid, pr.head, coldkey, pricing.run_cost_musd(rules), record_patch={
+            fees = self._fees(sid)
+            self.db.lock(sid, pr.head, coldkey, pricing.run_cost_musd(fees), record_patch={
                 "pr": {**self.db.sub(sid)["record"]["pr"], "locked_commit": pr.head, "lock_tag": f"axonry/{sid}"},
                 "coldkey": coldkey, "base": entry["base"],
                 **({"parent_is_champion": True} if entry.get("parent") == binding.CHAMPION
                    else {"parent": entry.get("parent")}),
-                "fee": {"usd_per_gpu_hour": rules["fee"]["usd_per_gpu_hour"], "gpus": rules["run"]["gpus"],
-                        "max_hours": rules["run"]["hours"], "max_agent_usd": rules["run"]["max_agent_usd"],
-                        "max_usd": pricing.run_cost_musd(rules) / 1e6},
+                "fee": {"usd_per_gpu_hour": fees["fee"]["usd_per_gpu_hour"], "gpus": fees["run"]["gpus"],
+                        "max_hours": fees["run"]["hours"], "max_agent_usd": fees["run"]["max_agent_usd"],
+                        "review_usd": pricing.review_musd(fees) / 1e6, "review_kept": pricing.review_kept(fees),
+                        "max_usd": pricing.run_cost_musd(fees) / 1e6},
                 "timeline": {**rec.get("timeline", {}), "entered": self.now()}})
             self._set_stage(self.db.sub(sid), "QUEUED", None, None)
         return pr.number
@@ -422,7 +424,7 @@ class Orchestrator:
     def _funds(self, s, rules):
         """-> None when the account of the coldkey paying for the entry covers a whole run, else (code, detail)."""
         paid = sum(self.db.charged(s["sid"]).values())          # its review fee, once charged, is part of the run
-        if self.db.available(s["coldkey"], besides=s["sid"]) < pricing.run_cost_musd(rules) - paid:
+        if self.db.available(s["coldkey"], besides=s["sid"]) < pricing.run_cost_musd(self._fees(s["sid"])) - paid:
             return binding.INSUFFICIENT_FUNDS, "insufficient funds"
         return None
 
@@ -545,7 +547,8 @@ class Orchestrator:
                 "base": rec["base"], "rules_sha256": rules.sha256,
                 "upload_protocol": self.d.comp_rules["upload"]["schema"],
                 "run": {"start": start, "deadline": deadline, "wrap_minutes": run["wrap_minutes"],
-                        "stall_minutes": run["stall_minutes"], "max_agent_usd": run.get("max_agent_usd")},
+                        "stall_minutes": run["stall_minutes"],
+                        "max_agent_usd": self._fees(sid)["run"].get("max_agent_usd")},
                 "sandbox": {"host": m.ip, "port": m.port, "user": m.user, "host_key": m.host_key(),
                             "private_key": private_key, "resources": resources,
                             "jump": m.jump and {"host": m.jump.host, "port": m.jump.port, "user": m.jump.user,
@@ -669,8 +672,8 @@ class Orchestrator:
 
     def _bill(self, s, end=None, agent_usd=None):
         """A run's GPUs are charged one hour's price at each full hour from kickoff; at its end the GPU time actually
-        used is settled (charge 0), the agent's model use is charged (charge -1, at most run.max_agent_usd) and the
-        review fee paid on entering review is given back (charge -3): a run costs what it used."""
+        used is settled (charge 0) and the agent's model use is charged (charge -1, at most run.max_agent_usd); the
+        review fee paid on entering review is given back (charge -3) unless the rules in force keep it."""
         rules, kick = self.rules_for(s["sid"]), s["record"]["timeline"]["kickoff"]
         hours = min(int((self.now() - kick) // 3600), int(rules["run"]["hours"]))
         for n in range(1, hours + 1):
@@ -678,9 +681,10 @@ class Orchestrator:
         if end is not None:
             rest = pricing.used_musd(rules, end - kick) - sum(v for n, v in self.db.charged(s["sid"]).items() if n > 0)
             self.db.charge(s["sid"], 0, s["coldkey"], max(rest, 0))
-            self.db.charge(s["sid"], -1, s["coldkey"], pricing.agent_musd(rules, agent_usd))
+            fees = self._fees(s["sid"])
+            self.db.charge(s["sid"], -1, s["coldkey"], pricing.agent_musd(fees, agent_usd))
             fee = self.db.charged(s["sid"]).get(REVIEW_FEE)
-            if fee:                       # the run's charges are its cost: the review fee goes back
+            if fee and not pricing.review_kept(fees):     # the run's charges are its cost: the review fee goes back
                 self.db.charge(s["sid"], REVIEW_FEE_BACK, s["coldkey"], -fee)
 
     # ------------------------------------------------------------------------------------------- evaluation machine
@@ -1126,6 +1130,11 @@ class Orchestrator:
                          "evidence": json.loads(c["evidence"])} for c in self.db.champions(base)],
             "base_model": {"id": base_id, "accuracy": {k: round(judge.accuracy(v), 4) for k, v in ref.items()} or None},
             "entries": rows})
+
+    def _fees(self, sid) -> dict:
+        """What an entry pays (fee, agent budget, whether the review fee is kept): the rules in force now, for every
+        entry whatever rules it entered under (the run itself - GPUs, hours, judge - stays its own rules')."""
+        return self._in_force(self.d.chain.finalized_head()) or self.rules_for(sid)
 
     def _in_force(self, head):
         """The rules in force at `head` (a next version may be staged), or None before the first takes effect."""
