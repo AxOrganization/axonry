@@ -134,3 +134,10 @@ def test_each_run_sets_the_project_models(monkeypatch):
     r = ArbosRunner({"a": 1}, runner=run, models=models, set_models=lambda *a: set_to.append(a))
     h = r.prepare("s1", "hk")
     assert (h.workspace, h.chat) == ("P1", "C1") and set_to == [("a", "P1", models)]
+
+
+
+def test_the_brief_leaves_the_starting_point_to_the_agent():
+    from axonry.agent import brief
+    text = brief._parent({"parent": {"sid": "P1"}, "judge": {"champion": "C1"}})
+    assert "`parent/edit/`" in text and "`champion/edit/`" in text and "is your choice" in text

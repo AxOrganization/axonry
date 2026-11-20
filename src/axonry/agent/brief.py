@@ -34,7 +34,8 @@ def _parent(task) -> str:
         return ""
     return f"""
 ## Starting point
-Published edits in this bundle: {" and ".join(starts)}, each with its own parents. To build on one, copy it to the
+Published edits in this bundle: {" and ".join(starts)}, each with its own parents. Which to build on, or the base
+model, is your choice (a start METHOD.md names is a suggestion). To build on one, copy it to the
 sandbox under the same name next to task.json (where `axonry-check` looks for it) and start the case from it
 (`python -m wsp.case init <case> ... --parent <name>/edit/edit.json`): your edit is a new layer on that model, its
 `"parent"` names it (`<name>/edit.json`), and the limits apply to your own ops, measured against it.
