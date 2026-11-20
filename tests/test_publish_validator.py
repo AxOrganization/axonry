@@ -76,3 +76,11 @@ def test_the_owner_burns_a_share_beside_the_champion_and_validators_need_no_chan
     assert v.resolve(doc, {5: "other"}) == {0: 1.0}                     # deregistered champion: all burned
     assert v.resolve(publisher.build_weights(99, "b", champ, 3, 100, burn=1.0), {5: "hk5"}) == {0: 1.0}
     assert v.resolve(publisher.build_weights(99, "b", champ, 3, 100), {5: "hk5"}) == {5: 1.0}
+
+
+def test_weights_are_set_once_per_half_epoch_from_block_zero():
+    from axonry_validator.main import window
+    assert window(0, 360) == window(179, 360) == 0 and window(180, 360) == 1      # windows of 180 blocks
+    assert window(9546783, 360) == 9546783 // 180
+    starts = [b for b in range(1, 2000) if window(b, 360) != window(b - 1, 360)]
+    assert all(b % 180 == 0 for b in starts) and min(y - x for x, y in zip(starts, starts[1:])) > 100   # rate limit

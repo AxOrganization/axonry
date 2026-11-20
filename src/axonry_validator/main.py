@@ -15,7 +15,23 @@ from . import network as published
 
 log = logging.getLogger("axonry-validator")
 SCHEMA = "axonry.weights/1"
-INTERVAL = 1200          # seconds between weight sets (above the chain's rate limit)
+TEMPO = 360              # blocks between the subnet's epochs, when the chain does not say
+RETRY = 60               # seconds before trying again after a failed set (a node hiccup), within the same window
+BLOCK_S = 12             # seconds per block, to sleep until the next window
+
+
+def window(block: int, tempo: int) -> int:
+    """Weights are set once per window of tempo // 2 blocks counted from block 0: at least once in every epoch (the
+    chain uses only the last weights before it), and further apart than the rate limit (100 blocks)."""
+    return block // max(tempo // 2, 1)
+
+
+def tempo_of(subtensor, netuid) -> int:
+    try:
+        import bittensor as bt  # noqa: PLC0415
+        return int(subtensor.query(bt.storage.SubtensorModule.Tempo, [netuid])) or TEMPO
+    except Exception:  # noqa: BLE001 - the default until the chain answers
+        return TEMPO
 MAX_AGE = 7 * 86400      # warn when the published weights are older than this
 VERSION_KEY = 0
 
@@ -139,14 +155,24 @@ def main(argv=None):
     subtensor = bt.Subtensor(network=a.network)
     state = State(a.state)
     log.info("axonry netuid %s on %s, weights from %s signed by %s", run.netuid, a.network, run.url, run.owner)
+    done = None                  # the window weights were set in
     while True:
         try:
-            cycle(run, state, subtensor, wallet)
-        except Exception as e:
-            log.error("cycle failed: %s", e)
+            tempo, block = tempo_of(subtensor, run.netuid), int(subtensor.block)
+        except Exception as e:  # noqa: BLE001 - the node is unreachable for a moment
+            log.error("reading the chain failed: %s (retrying in %s s)", e, RETRY)
+            time.sleep(RETRY)
+            continue
+        if window(block, tempo) != done:
+            try:
+                cycle(run, state, subtensor, wallet)
+                done = window(block, tempo)
+            except Exception as e:
+                log.error("cycle failed: %s (retrying in %s s)", e, RETRY)
         if a.once:
             return 0
-        time.sleep(INTERVAL)
+        half = max(tempo // 2, 1)
+        time.sleep(RETRY if window(block, tempo) != done else min((half - block % half) * BLOCK_S + 1, 3600))
 
 
 if __name__ == "__main__":
