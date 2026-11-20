@@ -1819,7 +1819,7 @@ def test_a_champion_is_archived_as_one_edit_on_the_base_with_its_lineage(tmp_pat
     se = "0000000110-0001"
     run_until_quiet(orch, clock, rounds=6)
     names, _ = orch.d.runner.bundles[se]
-    assert f"{sa}/edit/edit.json" in names and f"{sa}/edit/FLAT.json" not in names
+    assert {f"{sa}/edit/edit.json", f"{sa}/edit/FLAT.json", f"{sa}/edit/REPORT.md"} <= set(names)   # lineage, report
     assert orch.db.sub(se)["status"] == "PUBLISHED" and orch.db.sub(se)["record"]["parent"] == sa
     assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION"
     assert orch.db.sub(se)["record"]["flat"]["lineage"] == [sa]       # the new champion archived (each tick), lineage kept
@@ -1827,3 +1827,10 @@ def test_a_champion_is_archived_as_one_edit_on_the_base_with_its_lineage(tmp_pat
     flat_dir = tmp_path / "flat"
     orch._materialize_chain(se, flat_dir)                     # after: one edit on the base, however long its chain
     assert not (flat_dir / sa).exists() and json.loads((flat_dir / "edit.json").read_text())["parent"].startswith("Qwen/")
+
+
+def test_an_upload_without_a_task_record_is_refused_with_a_reason(tmp_path):
+    orch, *_ = make(tmp_path)
+    (tmp_path / "up").mkdir()
+    (tmp_path / "up" / "edit.json").write_text(json.dumps({"base": BASE, "parent": "x", "ops": []}))
+    assert orch._built_on(tmp_path / "up", {}, None) == ({}, "no task record of this run lists its starts")

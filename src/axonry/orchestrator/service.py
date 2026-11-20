@@ -790,6 +790,8 @@ class Orchestrator:
         """What the uploaded spec stacks on, by the "parent" its edit.json always names: the sid of one of the run's
         starts (task.json -> starts; in its bundle as <sid>/edit/), or the base by its full name; nothing else.
         -> ({"sid"} ({} for the base model), problem or None)."""
+        if not task or "starts" not in task:
+            return {}, "no task record of this run lists its starts"
         try:
             ref = json.loads((Path(edit_dir) / "edit.json").read_text()).get("parent")
         except ValueError as e:
@@ -806,14 +808,17 @@ class Orchestrator:
         """A published edit with its whole chain, as the toolkit builds it: submissions/<sid>/edit/ into dest, the
         edit it stacks on where its spec names it (a sid: dest/<sid>/edit/; an earlier path such as
         "parent/edit.json": there), and so on down the chain. A champion's archive form instead, when it has one: its
-        model as one edit on the base (flat/)."""
+        model as one edit on the base (flat/, with FLAT.json: its lineage) and its own REPORT.md."""
         dest = Path(dest)
         rec = (self.db.sub(sid) or {}).get("record", {})
-        prefix = layout.submission_flat_prefix(sid) if rec.get("flat") else layout.submission_edit_prefix(sid)
-        for k, _ in self.d.public.list(prefix):
-            if k != prefix + "FLAT.json":
+        edit, flat = layout.submission_edit_prefix(sid), layout.submission_flat_prefix(sid)
+        keys = ([(k, flat) for k, _ in self.d.public.list(flat)] + [(edit + "REPORT.md", edit)] if rec.get("flat")
+                else [(k, edit) for k, _ in self.d.public.list(edit)])
+        for k, prefix in keys:
+            data = self.d.public.get(k)
+            if data is not None:
                 (dest / k[len(prefix):]).parent.mkdir(parents=True, exist_ok=True)
-                (dest / k[len(prefix):]).write_bytes(self.d.public.get(k))
+                (dest / k[len(prefix):]).write_bytes(data)
         ref = json.loads((dest / "edit.json").read_text()).get("parent")
         if rec.get("parent") and ref and not rec.get("flat"):
             where = dest / Path(ref).parent if ref.endswith(".json") else dest / ref / "edit"
