@@ -163,10 +163,12 @@ def kickoff_message(bundle_name: str) -> str:
 
 def continue_message(task: dict, now: int) -> str:
     left = max(task["run"]["deadline"] - now, 0)
-    return (f"Continue the task (submission {task['sid']}) from the sandbox's PROGRESS.md. Time left: "
-            f"{left // 3600} h {left % 3600 // 60} min until {_fmt_ts(task['run']['deadline'])}. "
-            "Use it to carry the method further and improve your result (a status report is not progress); re-read "
-            "BRIEF.md if needed, and make sure a complete result is uploaded before the deadline.")
+    return (f"Automatic message (submission {task['sid']}): your turn ended while the run goes on, so it is sent to "
+            "keep the run from stopping. Nobody replies to you or answers questions; what to do next is yours "
+            f"to decide. Time left: {left // 3600} h {left % 3600 // 60} min until {_fmt_ts(task['run']['deadline'])}. "
+            "If something worth trying remains, carry on from the sandbox's PROGRESS.md (a status report is not "
+            "progress) and keep a complete result uploaded; if the method is done (its result uploaded, or none "
+            "worth uploading), run axonry-done in the sandbox and the run ends.")
 
 
 def wrap_message(task: dict, now: int) -> str:
