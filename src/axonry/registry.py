@@ -74,6 +74,11 @@ def load_base(base_id, root=ROOT):
     return doc
 
 
+def base_name(doc) -> str:
+    """A pinned base's full name, as an edit names it when it starts from the base: <hf_repo>@<revision>."""
+    return f"{doc['hf_repo']}@{doc['revision']}"
+
+
 def base_dirname(doc) -> str:
     """Directory name of a pinned base, as wsp expects under WSP_MODELS_DIR: <org>__<name>@<revision>."""
     return f"{doc['hf_repo'].replace('/', '__')}@{doc['revision']}"

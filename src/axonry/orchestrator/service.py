@@ -555,8 +555,13 @@ class Orchestrator:
                                                 "host_key": m.jump.host_key()}},
                 "r2": creds.as_dict(),
                 "limits": brief.limits_from(self.d.comp_rules),
-                "parent": ({"sid": rec["parent"], "path": "parent/edit/edit.json"} if rec.get("parent") else None),
-                "judge": self._judge_view(rules, rec)}
+                "parent": ({"sid": rec["parent"], "path": f"{rec['parent']}/edit/edit.json"} if rec.get("parent")
+                           else None),
+                "judge": self._judge_view(rules, rec),
+                "base_name": registry.base_name(registry.load_base(rec["base"], self.d.registry_root))}
+        champ = task["judge"]["champion"]
+        task["starts"] = ([{"sid": rec["parent"], "role": "parent"}] if rec.get("parent") else []) + \
+            ([{"sid": champ, "role": "champion"}] if champ and champ != rec.get("parent") else [])
         bundle = self._bundle(task, blobs)   # the only place the run's secrets go
         busy = [RunHandle(**self.db.run(r["sid"])["handle"]) for r in self.db.subs(status=("RUNNING",))]
         h = self.d.runner.prepare(sid, s["hotkey"], busy)
@@ -594,15 +599,13 @@ class Orchestrator:
                 add(f"ssh/{rel}", data)
             for rel, data in sorted(blobs.items()):
                 add(f"submission/{rel}", data)
-            parent, champion = (task["parent"] or {}).get("sid"), task["judge"]["champion"]
-            for name, sid in (("parent", parent), ("champion", champion if champion != parent else None)):
-                if sid:        # the full published chain, nested parent/ directories included
-                    chain = d / f"{name}_chain"
-                    shutil.rmtree(chain, ignore_errors=True)
-                    self._materialize_chain(sid, chain)
-                    for p in sorted(chain.rglob("*")):
-                        if p.is_file():
-                            add(f"{name}/edit/{p.relative_to(chain).as_posix()}", p.read_bytes())
+            for start in task["starts"]:       # each start under its id, its full published chain included
+                chain = d / f"{start['sid']}_chain"
+                shutil.rmtree(chain, ignore_errors=True)
+                self._materialize_chain(start["sid"], chain)
+                for p in sorted(chain.rglob("*")):
+                    if p.is_file():
+                        add(f"{start['sid']}/edit/{p.relative_to(chain).as_posix()}", p.read_bytes())
         return path
 
     # ------------------------------------------------------------------------------------------- supervise
@@ -764,6 +767,7 @@ class Orchestrator:
             build_dir = Path(self.d.work_dir) / sid / "build"
             shutil.rmtree(build_dir, ignore_errors=True)
             shutil.copytree(edit, build_dir)
+            self._from_base(build_dir)
             if ref:     # the published chain where the spec names it (not uploaded: it is public already)
                 self._materialize_chain(ref["sid"], build_dir / Path(ref["path"]).parent)
             ready = self._eval_ready()
@@ -790,10 +794,15 @@ class Orchestrator:
 
     @staticmethod
     def _starts(rec, task) -> dict:
-        """What a run's edit may stack on, by the "parent" its edit.json names: the entry's parent, and the champion
-        when the run started (when another; both are in the run's bundle). No "parent": the base model."""
-        out = {"parent/edit.json": rec.get("parent")} if rec.get("parent") else {}
-        champ = ((task or {}).get("judge") or {}).get("champion")
+        """What a run's edit may stack on, by the "parent" its edit.json names -> {name: sid, None for the base}: a
+        start of its bundle as "<id>/edit.json" (the entry's parent, the champion when the run started), or the
+        base by its full name; nothing else, and the parent is always named. A run started before the bundle listed
+        its starts names them parent/edit.json and champion/edit.json, the base by no parent."""
+        task = task or {}
+        if "starts" in task:
+            return {**{f"{s['sid']}/edit.json": s["sid"] for s in task["starts"]}, task["base_name"]: None}
+        out = {None: None, **({"parent/edit.json": rec["parent"]} if rec.get("parent") else {})}
+        champ = (task.get("judge") or {}).get("champion")
         if champ and champ != rec.get("parent"):
             out["champion/edit.json"] = champ
         return out
@@ -805,11 +814,10 @@ class Orchestrator:
         except ValueError as e:
             return {}, f"edit.json: {e}"
         starts = self._starts(rec, task)
-        if path is None:
-            return {}, None
         if path not in starts:
-            return {}, f"edit.json parent must be one of {sorted(starts)} or absent (the base model), not {path!r}"
-        return {"path": path, "sid": starts[path]}, None
+            named = " or ".join(repr(k) for k in starts if k is not None)
+            return {}, f"edit.json parent must be {named}, not {path!r}"
+        return ({"path": path, "sid": starts[path]} if starts[path] else {}), None
 
     def _materialize_chain(self, sid, dest: Path):
         """Rebuild a published edit with its whole chain: submissions/<sid>/edit/ into dest, the edit it stacks on
@@ -823,6 +831,18 @@ class Orchestrator:
         ref = json.loads((dest / "edit.json").read_text()).get("parent") if (dest / "edit.json").exists() else None
         if parent and ref:
             self._materialize_chain(parent, dest / Path(ref).parent)
+        else:
+            self._from_base(dest)
+
+    @staticmethod
+    def _from_base(edit_dir: Path):
+        """A spec naming the base (its full name, not a path) builds from the base: the copy built drops that name."""
+        p = Path(edit_dir) / "edit.json"
+        if p.exists():
+            spec = json.loads(p.read_text())
+            if spec.get("parent") and not str(spec["parent"]).endswith("/edit.json"):
+                spec.pop("parent")
+                p.write_text(json.dumps(spec))
 
     def _publish_agent(self, sid, rec):
         d = Path(self.d.work_dir) / sid / "agent"

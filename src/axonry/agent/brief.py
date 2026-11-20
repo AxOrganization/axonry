@@ -26,19 +26,17 @@ def limits_from(comp_rules: dict) -> dict:
 
 
 def _parent(task) -> str:
-    parent = (task.get("parent") or {}).get("sid")
-    champ = (task.get("judge") or {}).get("champion")
-    starts = ([f"`parent/edit/` (the entry's parent, `{parent}`)"] if parent else []) + \
-             ([f"`champion/edit/` (the champion, `{champ}`)"] if champ and champ != parent else [])
-    if not starts:
-        return ""
+    role = {"parent": "the entry's parent", "champion": "the champion"}
+    starts = [f"`{s['sid']}/edit/` ({role[s['role']]})" for s in task.get("starts", [])]
+    have = (f"Published edits in this bundle: {' and '.join(starts)}, each with its own parents. Which to build on, "
+            "or the base model, is your choice (a start METHOD.md names is a suggestion). To build on one, copy it to "
+            "the sandbox under the same name next to task.json (where `axonry-check` looks for it) and start the case "
+            "from it (`python -m wsp.case init <case> ... --parent <id>/edit/edit.json`): your edit is a new layer on "
+            "that model, and the limits apply to your own ops, measured against it.\n") if starts else ""
     return f"""
 ## Starting point
-Published edits in this bundle: {" and ".join(starts)}, each with its own parents. Which to build on, or the base
-model, is your choice (a start METHOD.md names is a suggestion). To build on one, copy it to the
-sandbox under the same name next to task.json (where `axonry-check` looks for it) and start the case from it
-(`python -m wsp.case init <case> ... --parent <name>/edit/edit.json`): your edit is a new layer on that model, its
-`"parent"` names it (`<name>/edit.json`), and the limits apply to your own ops, measured against it.
+{have}Your `edit.json` always names what it starts from in `"parent"`: `"<id>/edit.json"` for a published edit of
+this bundle, or `"{task.get('base_name')}"` for the base model.
 """
 
 

@@ -32,6 +32,24 @@ def done(_a):
     print("noted: the run ends within a minute, with the last complete upload (if any)")
 
 
+def start_of(task, ref):
+    """What an upload's "parent" may name, as admission accepts it -> the bundle directory of the start, or None for
+    the base; anything else stops here. A task listing its starts: "<id>/edit.json" of one of them, or the base's
+    full name, always named. An older task: parent/edit.json, champion/edit.json, or nothing (the base)."""
+    if "starts" in task:
+        ids = [s["sid"] for s in task["starts"]]
+        if ref == task["base_name"]:
+            return None
+        if isinstance(ref, str) and ref.endswith("/edit.json") and ref[:-len("/edit.json")] in ids:
+            return ref[:-len("/edit.json")]
+        named = " or ".join([*(f'"{i}/edit.json"' for i in ids), f'"{task["base_name"]}" (the base model)'])
+        raise SystemExit(f"edit.json parent must be {named}, not {ref!r}")
+    name = Path(ref).parent.as_posix() if ref else None
+    if name and name not in ("parent", "champion"):
+        raise SystemExit(f'edit.json parent must be "parent/edit.json" or "champion/edit.json", not {ref!r}')
+    return name
+
+
 def check(a):
     import shutil  # noqa: PLC0415
     import tempfile  # noqa: PLC0415
@@ -44,14 +62,14 @@ def check(a):
     task, out = json.loads(task_path.read_text()), Path(a.out_dir)
     if not (out / "edit.json").is_file():
         raise SystemExit(f"{out}: give the upload's edit/ directory (the one holding edit.json)")
-    if not (out / "edit.json").is_file():
-        raise SystemExit(f"{out}: give the upload's edit/ directory (the one holding edit.json)")
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
-        ref = json.loads((out / "edit.json").read_text()).get("parent") if (out / "edit.json").exists() else None
-        name = Path(ref).parent.as_posix() if ref else None      # "parent" or "champion": the start it stacks on
-        if name and name not in ("parent", "champion"):        # what admission accepts, nothing else
-            raise SystemExit(f'edit.json parent must be "parent/edit.json" or "champion/edit.json" (the bundle\'s '
-                             f'parent/edit/ or champion/edit/, kept under that name), not {ref!r}')
+        ref = json.loads((out / "edit.json").read_text()).get("parent")
+        name = start_of(task, ref)                              # the bundle directory it stacks on, or None (base)
+        if name is None and ref:                                # the base, by its full name: built from the base
+            out = shutil.copytree(out, Path(tmp) / "out")
+            spec = json.loads((out / "edit.json").read_text())
+            spec.pop("parent")
+            (out / "edit.json").write_text(json.dumps(spec))
         if name and not (out / name).exists():   # uploads only reference the published start
             parent = Path(a.parent) if a.parent else task_path.parent / name / "edit"
             if not (parent / "edit.json").exists():
@@ -73,8 +91,8 @@ def main(argv=None):
     c = sub.add_parser("check")
     c.add_argument("out_dir")
     c.add_argument("--task", default="task.json")
-    c.add_argument("--parent", help="the edit it stacks on (default: parent/edit or champion/edit beside task.json, "
-                                    "as its edit.json names)")
+    c.add_argument("--parent", help="the edit it stacks on (default: the directory its edit.json names, beside "
+                                    "task.json)")
     c.add_argument("--base-dir", default="/workspace/base")  # the verified base, read-only
     argv = list(sys.argv[1:] if argv is None else argv)
     alias = {"axonry-time": "time", "axonry-done": "done", "axonry-check": "check"}.get(prog)

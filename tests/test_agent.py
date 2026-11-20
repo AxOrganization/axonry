@@ -139,5 +139,7 @@ def test_each_run_sets_the_project_models(monkeypatch):
 
 def test_the_brief_leaves_the_starting_point_to_the_agent():
     from axonry.agent import brief
-    text = brief._parent({"parent": {"sid": "P1"}, "judge": {"champion": "C1"}})
-    assert "`parent/edit/`" in text and "`champion/edit/`" in text and "is your choice" in text
+    text = brief._parent({"starts": [{"sid": "P1", "role": "parent"}, {"sid": "C1", "role": "champion"}],
+                          "base_name": "Org/Base@1"})
+    assert "`P1/edit/` (the entry's parent)" in text and "`C1/edit/` (the champion)" in text and "is your choice" in text
+    assert '`"Org/Base@1"` for the base model' in text

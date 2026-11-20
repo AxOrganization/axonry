@@ -233,8 +233,9 @@ class FakeRunner:
             assert "HostName 203.0.113.7" in cfg and "Port 40100" in cfg and "User agent" in cfg
             assert tf.extractfile("ssh/known_hosts").read().decode() == "sandbox ssh-ed25519 SANDBOXKEY\n"
             method = tf.extractfile("submission/METHOD.md").read().decode()
-            parent_files = {m.name[len("parent/edit/"):]: tf.extractfile(m).read() for m in tf.getmembers()
-                            if m.name.startswith("parent/edit/")}
+            starts = {s["role"]: s["sid"] for s in task["starts"]}
+            parent_files = {m.name for m in tf.getmembers()
+                            if task.get("parent") and m.name.startswith(f"{task['parent']['sid']}/edit/")}
         n = method.split()[-1]
         self.methods[h.sid] = method
         self.saw_parent[h.sid] = bool(parent_files)
@@ -244,10 +245,12 @@ class FakeRunner:
         out.mkdir(parents=True, exist_ok=True)
         (out / "edit.json").write_text(json.dumps(PLANS[n]["spec"]))
         (out / "REPORT.md").write_text(f"plan {n}")
-        start = self.start_on.get(h.sid) or ("parent" if parent_files else None)
-        if start:                                        # stacking: the spec names the chain, which is not uploaded
-            spec = {**PLANS[n]["spec"], "parent": f"{start}/edit.json"}
-            (out / "edit.json").write_text(json.dumps(spec))
+        start = starts.get(self.start_on.get(h.sid) or ("parent" if parent_files else None))
+        ref = f"{start}/edit.json" if start else task["base_name"]   # the parent is always named
+        spec = {**PLANS[n]["spec"], "parent": ref}
+        if self.start_on.get(h.sid) == "omit":                      # an agent that leaves the parent out
+            spec.pop("parent")
+        (out / "edit.json").write_text(json.dumps(spec))
         man = make_manifest(out)
         for f in man["files"]:
             self.private.put(task["r2"]["prefix"] + f["path"], (out / f["path"][5:]).read_bytes())
@@ -705,15 +708,15 @@ def test_stacking_on_a_published_parent(tmp_path):
     se = "0000000110-0001"
     assert orch.d.runner.saw_parent[se]                       # the parent's edit was in the bundle
     names, text = orch.d.runner.bundles[se]                   # the champion is its parent: told, not shipped twice
-    assert not any(n.startswith("champion/") for n in names) and f"(now `{sa}`)," in text
+    assert [n for n in names if n.endswith("/edit/edit.json")] == [f"{sa}/edit/edit.json"] and f"(now `{sa}`)," in text
     assert orch.db.sub(se)["record"]["parent"] == sa
     assert orch.db.sub(se)["reason_code"] == "NEW_CHAMPION"   # judged against the champion (its parent)
     assert pub.get(layout.submission_edit_prefix(se) + "edit.json")
     assert pub.get(layout.submission_edit_prefix(se) + "parent/edit.json") is None   # chains are not stored twice
     chain = tmp_path / "chain"
     orch._materialize_chain(se, chain)                        # rebuilt from the public edits, nested by parent
-    assert json.loads((chain / "edit.json").read_text())["parent"] == "parent/edit.json"
-    assert (chain / "parent" / "edit.json").exists() and not (chain / "parent" / "parent").exists()
+    assert json.loads((chain / "edit.json").read_text())["parent"] == f"{sa}/edit.json"
+    assert (chain / sa / "edit.json").exists() and "parent" not in json.loads((chain / sa / "edit.json").read_text())
 
 
 def test_a_parent_that_can_never_qualify_rejects(tmp_path):
@@ -1628,7 +1631,7 @@ def test_a_run_is_told_the_champion_it_must_beat_and_gets_its_edit(tmp_path):
     orch.intake()
     run_until_quiet(orch, clock, rounds=2)
     names, text = orch.d.runner.bundles["0000000110-0001"]
-    assert "champion/edit/edit.json" in names and not any(n.startswith("parent/") for n in names)
+    assert [n for n in names if n.endswith("/edit/edit.json")] == [f"{sa}/edit/edit.json"]   # the champion only
     assert f"(now `{sa}`)," in text and "clearly better on at least 2" in text
 
 
@@ -1663,13 +1666,13 @@ def test_an_agent_may_build_on_the_champion_instead(tmp_path):
     orch.d.runner.start_on[se] = "champion"
     run_until_quiet(orch, clock, rounds=6)
     names, text = orch.d.runner.bundles[se]
-    assert "champion/edit/edit.json" in names and "`champion/edit/` (the champion" in text
+    assert f"{sa}/edit/edit.json" in names and f"`{sa}/edit/` (the champion)" in text
     assert orch.db.sub(se)["record"]["parent"] == sa         # what it actually stacked on
     assert orch.db.sub(se)["status"] == "PUBLISHED"
-    chain_dir = tmp_path / "chain"                           # its chain rebuilt for a child: A under champion/
+    chain_dir = tmp_path / "chain"                           # its chain rebuilt for a child: A under its id
     orch._materialize_chain(se, chain_dir)
-    assert json.loads((chain_dir / "edit.json").read_text())["parent"] == "champion/edit.json"
-    assert (chain_dir / "champion" / "edit.json").exists() and not (chain_dir / "parent").exists()
+    assert json.loads((chain_dir / "edit.json").read_text())["parent"] == f"{sa}/edit.json"
+    assert (chain_dir / sa / "edit.json").exists()
 
 
 def test_a_block_read_incomplete_is_read_again_later(tmp_path):
@@ -1771,3 +1774,15 @@ def test_a_kept_review_fee_is_part_of_the_most_an_entry_costs(tmp_path):
     charged = orch.db.charged(sid)
     assert -3 not in charged and sum(charged.values()) == pricing.used_musd(rules, clock.t - kick) + 20 * pricing.MUSD
     assert orch.db.accounts()[COLDKEYS["B"]]["held_usd"] == 0
+
+
+def test_an_upload_must_name_what_it_starts_from(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    sid = "0000000101-0001"
+    orch.d.runner.start_on[sid] = "omit"
+    open_rules(orch, 101)
+    run_until_quiet(orch, clock, rounds=6)
+    s = orch.db.sub(sid)
+    assert s["reason_code"] == "REJECTED_RULES" and "Qwen/" in s["reason"] and "not None" in s["reason"]

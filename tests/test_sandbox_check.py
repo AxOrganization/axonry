@@ -24,3 +24,13 @@ def test_axonry_check_says_which_directory_to_give(tmp_path, bad):
     (up / "edit.json").write_text(json.dumps({"base": "b", "ops": []}))
     with pytest.raises(SystemExit, match="edit/ directory"):
         sandbox_tools.main(["check", str(tmp_path / bad), "--task", str(tmp_path / "task.json"), "--base-dir", "x"])
+
+
+def test_the_parent_is_a_start_of_the_bundle_by_its_id_or_the_base_by_its_full_name():
+    from axonry.sandbox_tools import start_of
+    task = {"starts": [{"sid": "P1", "role": "parent"}, {"sid": "C1", "role": "champion"}], "base_name": "Org/B@1"}
+    assert start_of(task, "C1/edit.json") == "C1" and start_of(task, "Org/B@1") is None
+    for bad in (None, "parent/edit.json", "X9/edit.json", "Org/B"):        # never left out, never another
+        with pytest.raises(SystemExit, match='"P1/edit.json" or "C1/edit.json" or "Org/B@1"'):
+            start_of(task, bad)
+    assert start_of({}, None) is None and start_of({}, "champion/edit.json") == "champion"   # a run started before
