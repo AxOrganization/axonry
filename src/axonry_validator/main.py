@@ -30,6 +30,37 @@ def window(block: int, tempo: int) -> int:
 VERSION_KEY = 0
 
 
+def landed(subtensor, netuid, hotkey, since: int) -> bool:
+    """Whether this hotkey's weights reached the chain at or after block `since` (its LastUpdate): a set whose
+    confirmation was lost on the way back is on chain all the same."""
+    import bittensor as bt  # noqa: PLC0415
+    uid = subtensor.query(bt.storage.SubtensorModule.Uids, [netuid, hotkey])
+    if uid is None:
+        return False
+    last = subtensor.query(bt.storage.SubtensorModule.LastUpdate, [netuid]) or []
+    return int(uid) < len(last) and int(last[int(uid)]) >= since
+
+
+def step(run, state, subtensor, wallet, tempo, done, cycler=None, lander=landed):
+    """One pass of the loop -> (the window done, seconds to wait). Weights are set once per window; when setting them
+    fails, the chain is asked whether they landed this window anyway (the reply lost, not the extrinsic): then the
+    window is done, else it is tried again after RETRY."""
+    cycler = cycler or cycle
+    half = max(tempo // 2, 1)
+    block = int(subtensor.block)
+    if window(block, tempo) == done:
+        return done, (half - block % half) * 12 + 1           # until the next window (12 s a block)
+    try:
+        cycler(run, state, subtensor, wallet)
+    except Exception as e:  # noqa: BLE001
+        if lander(subtensor, run.netuid, wallet.hotkey.ss58_address, window(block, tempo) * half):
+            log.info("weights of this window are on chain (%s)", str(e)[:200])
+        else:
+            log.error("cycle failed: %s (retrying in %s s)", e, RETRY)
+            return done, RETRY
+    return window(block, tempo), (half - block % half) * 12 + 1
+
+
 def canonical(obj) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
 
@@ -153,17 +184,13 @@ def main(argv=None):
         tempo = int(subtensor.query(bt.storage.SubtensorModule.Tempo, [run.netuid])) or TEMPO
     except Exception:  # noqa: BLE001
         tempo = TEMPO
-    half, done = max(tempo // 2, 1), None
+    done = None
     while True:
-        wait = RETRY
         try:
-            block = int(subtensor.block)
-            if window(block, tempo) != done:
-                cycle(run, state, subtensor, wallet)
-                done = window(block, tempo)
-            wait = (half - block % half) * 12 + 1          # until the next window (12 s a block)
-        except Exception as e:
+            done, wait = step(run, state, subtensor, wallet, tempo, done)
+        except Exception as e:  # noqa: BLE001 - the chain unreachable: tried again
             log.error("cycle failed: %s (retrying in %s s)", e, RETRY)
+            wait = RETRY
         if a.once:
             return 0
         time.sleep(wait)

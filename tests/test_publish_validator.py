@@ -84,3 +84,35 @@ def test_weights_are_set_once_per_half_epoch_from_block_zero():
     assert window(9546783, 360) == 9546783 // 180
     starts = [b for b in range(1, 2000) if window(b, 360) != window(b - 1, 360)]
     assert all(b % 180 == 0 for b in starts) and min(y - x for x, y in zip(starts, starts[1:])) > 100   # rate limit
+
+
+def test_a_set_whose_reply_was_lost_counts_when_the_chain_has_it():
+    import argparse
+
+    from axonry_validator import main as v
+    run = argparse.Namespace(netuid=99)
+    wallet = argparse.Namespace(hotkey=argparse.Namespace(ss58_address="hk"))
+    sub = argparse.Namespace(block=9555000)
+
+    def lost(*a):
+        raise ConnectionError("Connection lost while waiting for a subscription response")
+    w = v.window(9555000, 360)
+    assert v.step(run, None, sub, wallet, 360, None, cycler=lost, lander=lambda *a: True)[0] == w   # landed: done
+    assert v.step(run, None, sub, wallet, 360, None, cycler=lost, lander=lambda *a: False) == (None, v.RETRY)
+    calls = []
+    v.step(run, None, sub, wallet, 360, None, cycler=lambda *a: calls.append(1), lander=lambda *a: False)
+    assert calls == [1]
+    assert v.step(run, None, sub, wallet, 360, w, cycler=lambda *a: calls.append(2))[0] == w and calls == [1]   # once
+
+
+def test_landed_reads_the_hotkeys_last_update():
+    import types
+
+    from axonry_validator import main as v
+    import bittensor as bt
+    names = {bt.storage.SubtensorModule.Uids: "Uids", bt.storage.SubtensorModule.LastUpdate: "LastUpdate"}
+    store = {"Uids": 3, "LastUpdate": [0, 0, 0, 9554990]}
+    sub = types.SimpleNamespace(query=lambda item, args: store[names[item]])
+    assert v.landed(sub, 99, "hk", 9554900) and not v.landed(sub, 99, "hk", 9555000)
+    store["Uids"] = None
+    assert not v.landed(sub, 99, "hk", 0)
