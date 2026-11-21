@@ -77,9 +77,17 @@ class GitHub:
                 raise RuntimeError(f"lock tag axonry/{sid} exists at {cur['object']['sha']}, not {commit}")
         return ref
 
-    def merge(self, commit: str, title: str):
-        """Merge a champion's locked commit into the main branch, whatever its PR head is now (GitHub marks the PR
-        merged when that commit is its head). The PR only touches its own directory, so this adds exactly it."""
+    def merge(self, number: int, commit: str, title: str):
+        """Merge a champion's locked commit into the main branch: as its PR's merge while the PR head is that commit
+        (GitHub then marks the PR merged and closes it); when the head moved on since (405 / 409), the commit alone,
+        whatever the PR head is now. The PR only touches its own directory, so this adds exactly it."""
+        try:
+            self._get(f"/repos/{self.repo}/pulls/{number}/merge", method="PUT",
+                      body={"sha": commit, "commit_title": title, "merge_method": "merge"})
+            return
+        except urllib.error.HTTPError as e:
+            if e.code not in (405, 409):
+                raise
         # 201 merged, 204 (empty body) already merged; 409 conflict raises
         self._get(f"/repos/{self.repo}/merges", raw=True, method="POST",
                   body={"base": self.branch, "head": commit, "commit_message": title})

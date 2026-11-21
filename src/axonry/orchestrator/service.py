@@ -154,9 +154,10 @@ class Orchestrator:
                 self.d.github.comment(n, r["text"])
                 r["commented"] = True
             if r.get("merge") and not r.get("merged"):   # the locked commit itself, whatever the PR head is now
-                self.d.github.merge(r["merge"], f"Champion {s['sid']} (PR #{n})")
+                self.d.github.merge(n, r["merge"], f"Champion {s['sid']} (PR #{n})")
                 r["merged"] = True
-            self.d.github.close(n)
+            if self.d.github.pr(n)["state"] != "closed":  # a PR merged as such is closed by GitHub
+                self.d.github.close(n)
             r["closed"] = True
         except Exception:
             log.exception("PR #%s of %s (tried again next tick)", n, s["sid"])

@@ -132,9 +132,11 @@ class FakeGitHub:
         assert self.tags.get(sid, commit) == commit
         self.tags[sid] = commit
 
-    def merge(self, commit, title):
+    def merge(self, number, commit, title):
         assert commit in self.tags.values(), "only a locked commit is merged"
-        self.merged.append(int(title.rsplit("#", 1)[1].rstrip(")")))
+        self.merged.append(number)
+        if self.prs[number]["head_sha"] == commit:      # as GitHub: merged as a PR, marked merged and closed
+            self.prs[number].update(merged=True, state="closed")
 
     def comment(self, number, text):
         self.comments.append((number, text))
@@ -1356,6 +1358,23 @@ def test_a_champions_pr_is_merged_even_if_github_fails_once(tmp_path):
     assert orch.db.champion(BASE)["sid"] == sid and failed == [1]
     orch.settle_prs()
     assert gh.merged == [1] and gh.prs[1]["state"] == "closed" and orch.db.sub(sid)["record"]["pr_result"]["closed"]
+    assert gh.prs[1]["merged"]                                # merged as a PR: GitHub shows it merged
+
+
+def test_a_champions_pr_pushed_after_its_lock_gets_the_locked_commit_merged_and_is_closed(tmp_path):
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    closed = []
+    gh.close = lambda number: (closed.append(number), gh.prs[number].update(state="closed"))
+    orch.tick("main")                                         # reviewed and locked
+    gh.push(1, "pushed-after-lock", gh.commits[gh.prs[1]["head_sha"]])
+    run_until_quiet(orch, clock)
+    sid = "0000000101-0001"
+    assert orch.db.champion(BASE)["sid"] == sid and gh.merged == [1] and closed == [1]
+    assert not gh.prs[1]["merged"] and orch.db.sub(sid)["record"]["pr_result"]["merged"]   # the locked commit alone
 
 
 
