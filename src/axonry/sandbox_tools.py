@@ -56,6 +56,11 @@ def check(a):
     task, out = json.loads(task_path.read_text()), Path(a.out_dir)
     if not (out / "edit.json").is_file():
         raise SystemExit(f"{out}: give the upload's edit/ directory (the one holding edit.json)")
+    from .evaluation.staging import MAX_TOTAL_BYTES  # noqa: PLC0415
+    size = sum(p.stat().st_size for p in out.iterdir() if p.is_file())   # what the upload sends
+    if size > MAX_TOTAL_BYTES:
+        raise SystemExit(f"{out}: the upload's files total {size:,} bytes, over the {MAX_TOTAL_BYTES:,}-byte limit "
+                         "(arrays belong in edit.npz, not inline in edit.json)")
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
         sid = start_of(task, json.loads((out / "edit.json").read_text()).get("parent"))
         if sid and not (out / sid / "edit" / "edit.json").exists():   # uploads only name the published start

@@ -46,3 +46,15 @@ def test_an_archived_starts_lineage_note_is_not_an_upload_file_but_may_sit_in_a_
     (tmp_path / "FLAT.json").write_text("{}")                     # in the upload itself: not an upload file
     assert [v for v in static_checks(tmp_path, {"ops": []}, rules)[0] if "not an upload file" in v] == [
         "FLAT.json: not an upload file (REPORT.md, edit.json, edit.npz)"]
+
+
+def test_axonry_check_refuses_an_upload_over_the_size_limit(tmp_path):
+    from axonry import sandbox_tools
+    from axonry.evaluation.staging import MAX_TOTAL_BYTES
+    (tmp_path / "task.json").write_text(json.dumps({"base": "b", "starts": [], "base_name": "Org/B@1"}))
+    up = tmp_path / "upload"
+    up.mkdir()
+    (up / "edit.json").write_text(json.dumps({"base": "b", "parent": "Org/B@1", "ops": [{"values": [0.5] * 10}]}))
+    (up / "edit.npz").write_bytes(b"\0" * MAX_TOTAL_BYTES)
+    with pytest.raises(SystemExit, match="over the 8,388,608-byte limit"):
+        sandbox_tools.main(["check", str(up), "--task", str(tmp_path / "task.json"), "--base-dir", "unused"])
