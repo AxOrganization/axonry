@@ -33,14 +33,31 @@ def _qa(repo, split, prefix, q="question", a="answer"):
     return lambda: [{"id": f"{prefix}_{i}", "problem": r[q], "answer": str(r[a])} for i, r in enumerate(_hf(repo, split=split))]
 
 
-def _bbh(per_task=20, seed=0):  # BIG-Bench Hard: a fixed sample of every task, exact-match answers
-    from datasets import get_dataset_config_names  # noqa: PLC0415
-    rows, rng = [], random.Random(seed)
-    for task in sorted(set(get_dataset_config_names("lukaemon/bbh")) - {"dyck_languages"}):  # its answers are braces,
-        # which cannot be given inside \\boxed{}
-        d = _hf("lukaemon/bbh", task, split="test")
-        rows += [{"id": f"bbh_{task}_{i}", "problem": d[i]["input"], "answer": d[i]["target"], "subject": task}
-                 for i in sorted(rng.sample(range(len(d)), min(per_task, len(d))))]
+BBH_TASKS = tuple(sorted(("boolean_expressions", "date_understanding", "formal_fallacies", "geometric_shapes",
+             "hyperbaton", "logical_deduction_three_objects", "logical_deduction_five_objects",
+             "logical_deduction_seven_objects", "multistep_arithmetic_two", "navigate", "object_counting",
+             "penguins_in_a_table", "reasoning_about_colored_objects", "temporal_sequences",
+             "tracking_shuffled_objects_three_objects", "tracking_shuffled_objects_five_objects",
+             "tracking_shuffled_objects_seven_objects", "web_of_lies", "word_sorting")))   # the toolkit's order
+
+
+def _bbh(per_task=26, seed=0, revision="982bb89fd79532a8ac676a61fc42eb1aeec63f99"):
+    """BIG-Bench Hard: the tasks the toolkit generates practice for (wsp.puzzles; no common-sense or taste tasks, no
+    dyck_languages, whose brace answers cannot sit in \\boxed{}), per_task test items each in a seeded order, a
+    repeated question once - as the toolkit's bbh_eval/build.py."""
+    rows = []
+    for task in BBH_TASKS:
+        d = _hf("lukaemon/bbh", task, split="test", revision=revision)
+        seen, idx = set(), []
+        for i in random.Random(f"{seed}:{task}").sample(range(len(d)), len(d)):
+            f = fingerprint(d[i]["input"])
+            if f not in seen:
+                seen.add(f)
+                idx.append(i)
+            if len(idx) == per_task:
+                break
+        rows += [{"id": f"bbh_{task}_{i}", "source": "bbh", "task": "exact", "subject": task,
+                  "problem": d[i]["input"], "answer": d[i]["target"]} for i in sorted(idx)]
     return rows
 
 
