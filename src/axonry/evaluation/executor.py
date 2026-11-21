@@ -111,10 +111,26 @@ class SshExecutor:
         raise JobFailed(f"job {job} did not finish within {timeout}s")
 
     def push_dir(self, on, local: Path, model_id: str, sub: str):
-        dst = f"{self.root}/eval/{model_id}/{sub}"
-        self._ssh(on, f"rm -rf {shlex.quote(dst)} && mkdir -p {shlex.quote(dst)}")
+        """local's files to eval/<model_id>/<sub>/ on the machine, by content: a file the machine already holds (a
+        start's published edit placed in many builds, a retry after a cut transfer) is copied there, not sent again;
+        each missing file is sent on its own and kept once complete (eval/_cache/<sha256>, a week)."""
+        import hashlib  # noqa: PLC0415
+        q, dst, cache = shlex.quote, f"{self.root}/eval/{model_id}/{sub}", f"{self.root}/eval/_cache"
+        files = {p.relative_to(local).as_posix(): (p, hashlib.sha256(p.read_bytes()).hexdigest())
+                 for p in sorted(Path(local).rglob("*")) if p.is_file()}
+        place = " && ".join(f"mkdir -p {q(str(Path(dst, rel).parent))} && "
+                            f"{{ cp {cache}/{h} {q(f'{dst}/{rel}')} 2>/dev/null || echo {h}; }}"
+                            for rel, (_, h) in files.items())
+        prep = (f"mkdir -p {cache} && find {cache} -type f -mtime +7 -delete; rm -rf {q(dst)} && mkdir -p {q(dst)}"
+                + (f" && {place}" if place else ""))
+        missing = set(self._ssh(on, prep, timeout=300).split())
         try:
-            machines.scp(self.machine(on), self.key, sorted(Path(local).iterdir()), f"{dst}/", timeout=600)
+            for h in sorted(missing):                    # each content sent once, then placed wherever it goes
+                p = next(p for p, h2 in files.values() if h2 == h)
+                machines.scp(self.machine(on), self.key, [p], f"{cache}/{h}.part", timeout=900)
+                place = " && ".join(f"cp {cache}/{h} {q(f'{dst}/{rel}')}" for rel, (_, h2) in files.items() if h2 == h)
+                self._ssh(on, f"test \"$(sha256sum {cache}/{h}.part | cut -d' ' -f1)\" = {h} && "
+                              f"mv {cache}/{h}.part {cache}/{h} && {place}", timeout=300)
         except machines.MachineError as e:
             raise ExecError(f"eval host {on}: {e}") from e
 
