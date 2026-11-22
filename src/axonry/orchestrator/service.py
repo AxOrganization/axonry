@@ -356,6 +356,9 @@ class Orchestrator:
                     {"commit": pr.head, "directory": pr.directory} if pr.digest == s["content_digest"] else None)
                 if first:
                     patch["revealed"] = first
+            if "revealed" not in rec["timeline"]:   # when the content became public: the first carrier's opening
+                patch["timeline"] = {**rec["timeline"],                     # (GitHub's time; unknown: committed)
+                                     "revealed": rec["timeline"]["committed"] if pr.opened_at is None else pr.opened_at}
             self.db.update(sid, pr_number=pr.number, head_sha=pr.head, record_patch=patch)
             s = self.db.sub(sid)
         if by is not None and pr.opened_at is not None and pr.opened_at > by:     # GitHub's time, not our tick's
@@ -418,7 +421,7 @@ class Orchestrator:
                         "max_hours": fees["run"]["hours"], "max_agent_usd": fees["run"]["max_agent_usd"],
                         "review_usd": pricing.review_musd(fees) / 1e6, "review_kept": pricing.review_kept(fees),
                         "max_usd": pricing.run_cost_musd(fees) / 1e6},
-                "timeline": {**rec.get("timeline", {}), "entered": self.now()}})
+                "timeline": {**self.db.sub(sid)["record"].get("timeline", {}), "entered": self.now()}})
             self._set_stage(self.db.sub(sid), "QUEUED", None, None)
         return pr.number
 
@@ -1054,19 +1057,28 @@ class Orchestrator:
     # ------------------------------------------------------------------------------------------- decide
     def decide(self):
         """Decisions follow priority (the chain order of each run's committed content), not the order runs finish:
-        walking submissions by priority, a SCORED one is decided against the champion of that moment; the walk stops
-        at the first earlier submission still in the pipeline (in review, queued, running or being evaluated), so a
-        later commitment - e.g. a copy - can never be judged before the content it may have copied. WAITING ones (no
-        PR, no funds yet) do not block: nobody can be held up by a miner who does not show up."""
+        walking submissions by priority, a SCORED one is decided against the champion of that moment. An earlier
+        submission still in the pipeline (in review, queued, running or being evaluated) holds up every later
+        commitment made once its content was public (a PR carried it: timeline "revealed"), so a later commitment -
+        e.g. a copy - can never be judged before the content it may have copied. A commitment made before that reveal
+        cannot have copied it and does not wait for it: a late reveal holds up nobody who committed before it.
+        WAITING ones (no PR, no funds yet) do not block: nobody can be held up by a miner who does not show up."""
         waiting = ("REVIEW", "QUEUED", "RUNNING", "COLLECTING", "ADMITTED")
-        blocked = set()                       # each base's line is decided independently
-        for s in sorted(self.db.subs(), key=self.priority):
-            if s["base"] in blocked:
-                continue
+        held = {}                             # base -> the earliest reveal of its earlier submissions in the pipeline
+        for s in sorted(self.db.subs(), key=self.priority):   # each base's line is decided independently
+            base = s["base"]
             if s["status"] in waiting:
-                blocked.add(s["base"])
-            elif s["status"] == "SCORED":
+                held[base] = min(held.get(base, self._revealed_at(s)), self._revealed_at(s))
+            elif s["status"] == "SCORED" and not (base in held
+                                                  and held[base] <= s["record"]["timeline"]["committed"]):
                 self._decide_one(s)
+
+    @staticmethod
+    def _revealed_at(s):
+        """When a submission's content became public (timeline "revealed"); entries carried before that was recorded
+        count as revealed at their commitment, so they hold up every later one."""
+        tl = s["record"]["timeline"]
+        return tl.get("revealed", tl["committed"])
 
     @staticmethod
     def _salt(rules):

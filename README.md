@@ -135,8 +135,9 @@ fee. What an entry pays (these fees and the agent budget) is set by the rules in
    axonry-miner board <uid|hotkey|submission id>   # one miner in full: account, entry, its run live (time left,
                                                    # progress, each GPU), timeline, admission, result per benchmark
    ```
-   Runs may finish in any order, but results are decided strictly in priority order against the champion of
-   that moment.
+   Runs may finish in any order, but results are decided in priority order against the champion of that
+   moment: an entry waits for every earlier one whose content was public (a PR carried it) before its own
+   commitment, never for one revealed after it (that one it cannot have copied).
 
 The price, the GPUs, the run time, the base model, the benchmarks and the decision thresholds are part of the
 published rules (`axonry-miner` reads them for you).

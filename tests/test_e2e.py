@@ -611,6 +611,61 @@ def test_copy_cannot_overtake_the_original(tmp_path):
     assert orch.db.champion(BASE)["sid"] == sa
 
 
+def test_a_late_reveal_holds_up_no_one_who_committed_before_it(tmp_path):
+    """A commits first but opens its PR only after C committed: C cannot have copied A, so C, finished first, is
+    decided at once instead of waiting for A's review and run; A is decided later, against the champion of its
+    moment (C). A's timeline shows when its content became public: GitHub's opening time of its first carrier."""
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    gh.approve_all = False
+    deposit(chain, "A", 101)
+    commit(chain, "A", blobs_for("A"), 101)
+    nc = pay(orch, chain, "C", 105, 1)
+    chain.head = 105
+    open_rules(orch, 101)
+    sa, sc = "0000000101-0001", "0000000105-0001"
+    na = len(gh.prs) + 1
+    gh.add_pr(na, HOTKEYS["A"], "a1", blobs_for("A"))
+    gh.prs[na]["opened_at"] = int(Clock.t) + 3600       # an hour after C's commitment
+    gh.verdicts[(nc, content_digest_of_blobs(blobs_for("C")))] = "approved"
+    run_until_quiet(orch, clock, rounds=6)
+    a = orch.db.sub(sa)
+    assert a["status"] == "REVIEW" and a["record"]["timeline"]["revealed"] == int(Clock.t) + 3600
+    assert orch.db.sub(sc)["reason_code"] == "NEW_CHAMPION"           # not held up by A
+    gh.verdicts[(na, content_digest_of_blobs(blobs_for("A")))] = "approved"
+    run_until_quiet(orch, clock, rounds=6)
+    a = orch.db.sub(sa)
+    assert (a["reason_code"], a["record"]["reference"]) == ("NOT_DOMINATING", sc)   # same weights as C
+    assert orch.db.champion(BASE)["sid"] == sc
+
+
+def test_a_reveal_before_a_later_commitment_holds_it_up(tmp_path):
+    """A's PR was open before C committed: C may have copied A, so C, finished first, waits for A's decision however
+    long A's review and run take, and is then judged against A."""
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    gh.approve_all = False
+    na = pay(orch, chain, "A", 101, 1)
+    gh.prs[na]["opened_at"] = int(Clock.t) + 60
+    deposit(chain, "C", 105)
+    chain.blocks.setdefault(105, []).append(             # committed an hour after A's content became public
+        Commitment(105, 1, HOTKEYS["C"], content_digest_of_blobs(blobs_for("C")), 1, int(Clock.t) + 3600))
+    nc = len(gh.prs) + 1
+    gh.add_pr(nc, HOTKEYS["C"], "c1", blobs_for("C"))
+    gh.prs[nc]["opened_at"] = int(Clock.t) + 3660
+    chain.head = 105
+    open_rules(orch, 101)
+    sa, sc = "0000000101-0001", "0000000105-0001"
+    gh.verdicts[(nc, content_digest_of_blobs(blobs_for("C")))] = "approved"
+    run_until_quiet(orch, clock, rounds=6)
+    assert orch.db.sub(sc)["status"] == "SCORED" and orch.db.sub(sa)["status"] == "REVIEW"
+    gh.verdicts[(na, content_digest_of_blobs(blobs_for("A")))] = "approved"
+    run_until_quiet(orch, clock, rounds=6)
+    assert orch.db.sub(sa)["reason_code"] == "NEW_CHAMPION"
+    c = orch.db.sub(sc)
+    assert (c["reason_code"], c["record"]["reference"]) == ("NOT_DOMINATING", sa)
+
+
 def test_nobody_else_can_carry_a_hotkeys_entry(tmp_path):
     """Mallory opens a PR with A's committed content in A's directory: it carries nothing (A's commitment names A's
     GitHub id), so it can neither charge A nor hold A's entry hostage; A's own PR carries it."""
@@ -1080,7 +1135,7 @@ def _unseen_a_public_b(orch, chain):
 def test_without_a_reveal_deadline_a_late_reveal_goes_first(tmp_path):
     """The case reveal_hours closes. Without it, a commitment can stay unseen for as long as its owner likes: A opens
     its PR a month after B's content became public and still goes ahead of B in the review queue (so B is compared
-    with A, not A with B) and in decisions."""
+    with A, not A with B)."""
     orch, chain, clock, pub = make(tmp_path)
     orch.bootstrap()
     gh = orch.d.github
