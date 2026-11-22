@@ -84,10 +84,11 @@ From the lock on, pushes to the PR never affect the entry.
   the deadline, or the agent's `axonry-done` - the time actually used) and, at its end, for its agent's model use
   (at most the agent budget); never more than its account was holding.
 - Decisions do not follow finishing order. Entries are walked in priority order: a scored submission is judged
-  against the champion of that moment, and the walk stops at the first earlier submission still in review, queued,
-  running or being evaluated. A later commitment - a copy that slipped through, or a lucky run - is never judged
-  before the earlier content it may have copied. `WAITING` submissions (no PR or no funds yet) do not hold the
-  walk: a miner who does not show up cannot stall everyone.
+  against the champion of that moment, unless an earlier submission still undecided (in review, queued, running,
+  being evaluated or scored) was already public - a PR carrying it open - when it was committed. A later
+  commitment - a copy that slipped through, or a lucky run - is never judged before earlier content it may have
+  copied; content nobody could see when it was committed holds no one. `WAITING` submissions (no PR or no funds
+  yet) do not hold anyone: a miner who does not show up cannot stall everyone.
 - A new champion's locked commit is merged into the main branch; every PR gets its result as a comment.
 - Each base model has its own line of champions (rules moving to a new base start a new line; earlier lines stay
   published). Until a line has a champion, its base model is the reference and the weight goes to uid 0 (burned).

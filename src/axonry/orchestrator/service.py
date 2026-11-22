@@ -356,6 +356,8 @@ class Orchestrator:
                     {"commit": pr.head, "directory": pr.directory} if pr.digest == s["content_digest"] else None)
                 if first:
                     patch["revealed"] = first
+            if not s["pr_number"]:              # its first carrier: the content is public since that PR was opened
+                patch["public_at"] = min(pr.opened_at or self.now(), self.now())
             self.db.update(sid, pr_number=pr.number, head_sha=pr.head, record_patch=patch)
             s = self.db.sub(sid)
         if by is not None and pr.opened_at is not None and pr.opened_at > by:     # GitHub's time, not our tick's
@@ -1054,19 +1056,21 @@ class Orchestrator:
     # ------------------------------------------------------------------------------------------- decide
     def decide(self):
         """Decisions follow priority (the chain order of each run's committed content), not the order runs finish:
-        walking submissions by priority, a SCORED one is decided against the champion of that moment; the walk stops
-        at the first earlier submission still in the pipeline (in review, queued, running or being evaluated), so a
-        later commitment - e.g. a copy - can never be judged before the content it may have copied. WAITING ones (no
-        PR, no funds yet) do not block: nobody can be held up by a miner who does not show up."""
-        waiting = ("REVIEW", "QUEUED", "RUNNING", "COLLECTING", "ADMITTED")
-        blocked = set()                       # each base's line is decided independently
-        for s in sorted(self.db.subs(), key=self.priority):
-            if s["base"] in blocked:
-                continue
-            if s["status"] in waiting:
-                blocked.add(s["base"])
-            elif s["status"] == "SCORED":
+        walking submissions by priority, a SCORED one is decided against the champion of that moment, unless an
+        earlier submission still undecided (in review, queued, running, being evaluated, or scored and itself held)
+        was public before it was committed: a later commitment - e.g. a copy - is never judged before content it
+        could have copied, and content nobody could see holds no one. Public: since the PR that first carried it was
+        opened (GitHub's time; an entry carried before this was recorded counts as public from its commitment).
+        WAITING ones (no PR, no funds yet) do not hold: nobody can be held up by a miner who does not show up."""
+        undecided = ("REVIEW", "QUEUED", "RUNNING", "COLLECTING", "ADMITTED", "SCORED")
+        public = {}                           # base -> when the earliest-public undecided earlier submission became so
+        for s in sorted(self.db.subs(status=undecided), key=self.priority):
+            rec, base = s["record"], s["base"]
+            committed = rec["timeline"]["committed"]
+            if s["status"] == "SCORED" and not public.get(base, float("inf")) <= committed:
                 self._decide_one(s)
+            else:
+                public[base] = min(public.get(base, float("inf")), rec.get("public_at", committed))
 
     @staticmethod
     def _salt(rules):

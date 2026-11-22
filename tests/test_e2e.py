@@ -611,6 +611,64 @@ def test_copy_cannot_overtake_the_original(tmp_path):
     assert orch.db.champion(BASE)["sid"] == sa
 
 
+def test_content_nobody_could_see_holds_no_later_decision(tmp_path):
+    """A commits first but opens its PR only after B committed: B could not have copied A, so B, scored, is decided at
+    once (against the base) even while A is still in the pipeline; A, decided later, meets B as the champion. The
+    time A became public is recorded when its first PR is seen, and kept when A is locked in that same pass."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.bootstrap()
+    gh = orch.d.github
+    gh.approve_all = False
+    b = {"entry.json": blobs_for("B")["entry.json"], "METHOD.md": b"method of E"}    # a run that beats the base
+    deposit(chain, "A", 101)
+    commit(chain, "A", blobs_for("A"), 101)
+    nb = pay(orch, chain, "B", 105, 1, blobs=b)
+    gh.verdicts[(nb, content_digest_of_blobs(b))] = "approved"       # carried and locked in one pass
+    chain.head = 105
+    open_rules(orch, 101)
+    sa, sb = "0000000101-0001", "0000000105-0001"
+    assert orch.db.sub(sb)["status"] == "QUEUED" and orch.db.sub(sb)["record"]["public_at"] == Clock.t
+    clock.t = Clock.t + 3600
+    gh.add_pr(nb + 1, HOTKEYS["A"], "a1", blobs_for("A"))
+    gh.prs[nb + 1]["opened_at"] = clock.t                  # after B's commitment
+    orch.intake()
+    a = orch.db.sub(sa)
+    assert a["status"] == "REVIEW" and a["record"]["public_at"] == clock.t > orch.db.sub(sb)["record"]["timeline"]["committed"]
+    run_until_quiet(orch, clock)
+    assert orch.db.sub(sa)["status"] == "REVIEW"           # still in the pipeline ...
+    assert orch.db.sub(sb)["reason_code"] == "NEW_CHAMPION"        # ... and B decided all the same
+    gh.verdicts[(nb + 1, content_digest_of_blobs(blobs_for("A")))] = "approved"
+    run_until_quiet(orch, clock)
+    a = orch.db.sub(sa)
+    assert a["status"] == "PUBLISHED" and a["record"]["reference"] == sb      # A met B, the champion of its moment
+
+
+def test_content_public_before_a_commitment_holds_it(tmp_path):
+    """The other side: A's PR was open before B committed, so B (scored first) waits for A, whatever order the runs
+    finish in. An entry carried before the public time was recorded counts as public from its commitment."""
+    orch, chain, clock, pub = make(tmp_path)
+    orch.bootstrap()
+    gh = orch.d.github
+    gh.approve_all = False
+    pay(orch, chain, "A", 101, 1)
+    b = {"entry.json": blobs_for("B")["entry.json"], "METHOD.md": b"method of D"}    # a run not better than A's
+    nb = pay(orch, chain, "B", 105, 1, blobs=b)
+    chain.head = 105
+    open_rules(orch, 101)
+    sa, sb = "0000000101-0001", "0000000105-0001"
+    rec = orch.db.sub(sa)["record"]
+    assert rec["public_at"] <= orch.db.sub(sb)["record"]["timeline"]["committed"]
+    orch.db.c.execute("UPDATE submissions SET record=json_remove(record, '$.public_at') WHERE sid=?", (sa,))
+    assert "public_at" not in orch.db.sub(sa)["record"]                      # as an entry from before
+    gh.verdicts[(nb, content_digest_of_blobs(b))] = "approved"
+    run_until_quiet(orch, clock, rounds=4)
+    assert orch.db.sub(sb)["status"] == "SCORED" and orch.db.sub(sa)["status"] == "REVIEW"
+    gh.verdicts[(1, content_digest_of_blobs(blobs_for("A")))] = "approved"
+    run_until_quiet(orch, clock, rounds=6)
+    assert orch.db.sub(sa)["reason_code"] == "NEW_CHAMPION" and orch.db.sub(sb)["record"]["reference"] == sa
+    assert orch.db.sub(sb)["reason_code"] == "NOT_DOMINATING"
+
+
 def test_nobody_else_can_carry_a_hotkeys_entry(tmp_path):
     """Mallory opens a PR with A's committed content in A's directory: it carries nothing (A's commitment names A's
     GitHub id), so it can neither charge A nor hold A's entry hostage; A's own PR carries it."""
@@ -1081,7 +1139,7 @@ def _unseen_a_public_b(orch, chain):
 def test_without_a_reveal_deadline_a_late_reveal_goes_first(tmp_path):
     """The case reveal_hours closes. Without it, a commitment can stay unseen for as long as its owner likes: A opens
     its PR a month after B's content became public and still goes ahead of B in the review queue (so B is compared
-    with A, not A with B) and in decisions."""
+    with A, not A with B)."""
     orch, chain, clock, pub = make(tmp_path)
     orch.bootstrap()
     gh = orch.d.github

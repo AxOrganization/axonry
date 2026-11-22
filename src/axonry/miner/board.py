@@ -124,7 +124,7 @@ def board(status: dict, line: dict | None, n=20, color=None) -> str:
                   "STARTING": "its machine is being set up",
                   "REVIEW": "waiting for the reviewer", "COLLECTING": "run over: edit upload and admission",
                   "ADMITTED": "benchmarks on the evaluation machine",
-                  "SCORED": "decided once every earlier submission is"}.get(x["status"], "")
+                  "SCORED": "decided once every earlier submission public before it is"}.get(x["status"], "")
         rows.append([str(i), uid(x["hotkey"]), hot(x["hotkey"]), x["sid"], pr(x["pr"], x.get("title")),
                      st(label, col), detail])
     out = [table("1. Champion and queue (priority order)", ["#", "UID", "HOTKEY", "SID", "PR", "STATUS", "DETAIL"],
