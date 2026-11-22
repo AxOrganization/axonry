@@ -1025,9 +1025,10 @@ def test_every_figure_of_a_decision_is_kept_for_good(tmp_path):
     score = json.loads(pub.get(layout.score(sid)))
     assert score["model"] == sid and all(b["vs_champion"]["ref"] == f"base:{BASE}" for b in score["benchmarks"].values())
     assert json.loads(pub.get(layout.submission(sid, "submission.json")))["decision"] == "NEW_CHAMPION"
+    keys = orch.rules_for(sid).benchmark_keys()        # the rules this entry is judged under
     base_score = json.loads(pub.get(layout.score(f"base:{BASE}")))
-    assert base_score["model"] == f"base:{BASE}" and set(base_score["benchmarks"]) == set(RULES.benchmark_keys())
-    for k in RULES.benchmark_keys():
+    assert base_score["model"] == f"base:{BASE}" and set(base_score["benchmarks"]) == set(keys)
+    for k in keys:
         assert pub.get(layout.results(sid, k)) and pub.get(layout.results(f"base:{BASE}", k))
     line = json.loads(pub.get(layout.line(BASE)))
     assert line["base_model"]["accuracy"] == {k: b["acc"] for k, b in base_score["benchmarks"].items()}
