@@ -44,7 +44,7 @@ BBH_TASKS = tuple(sorted(("boolean_expressions", "date_understanding", "formal_f
 def _bbh(per_task=26, seed=0, revision="982bb89fd79532a8ac676a61fc42eb1aeec63f99"):
     """BIG-Bench Hard: the tasks the toolkit generates practice for (wsp.puzzles; no common-sense or taste tasks, no
     dyck_languages, whose brace answers cannot sit in \\boxed{}), per_task test items each in a seeded order, a
-    repeated question once - as the toolkit's bbh_eval/build.py."""
+    repeated question once."""
     rows = []
     for task in BBH_TASKS:
         d = _hf("lukaemon/bbh", task, split="test", revision=revision)
@@ -59,6 +59,16 @@ def _bbh(per_task=26, seed=0, revision="982bb89fd79532a8ac676a61fc42eb1aeec63f99
         rows += [{"id": f"bbh_{task}_{i}", "source": "bbh", "task": "exact", "subject": task,
                   "problem": d[i]["input"], "answer": d[i]["target"]} for i in sorted(idx)]
     return rows
+
+
+def _bbh_all(revision="982bb89fd79532a8ac676a61fc42eb1aeec63f99"):
+    """Every BIG-Bench Hard test question, all its tasks: not a benchmark, the wider set the toolkit's practice is kept
+    apart from (fingerprints)."""
+    from datasets import get_dataset_config_names  # noqa: PLC0415
+    return [{"id": f"bbh_{task}_{i}", "source": "bbh", "task": "exact", "subject": task, "problem": r["input"],
+             "answer": r["target"]}
+            for task in sorted(get_dataset_config_names("lukaemon/bbh", revision=revision))
+            for i, r in enumerate(_hf("lukaemon/bbh", task, split="test", revision=revision))]
 
 
 def _arc(n=500, seed=0):  # ARC-Challenge test: another multiple-choice source (grade-school science)
@@ -198,6 +208,7 @@ BENCHMARKS = {
     "mmlupro500": (_mmlupro, "choice", None),
     "ifeval": (_ifeval, "ifeval", None),
     "bbh": (_bbh, "exact", None),
+    "bbh_all": (_bbh_all, "exact", None),  # fingerprints only
     "mgsm": (_mgsm, "math", None),
     "niah": (_niah, "exact", None),
     "niah30k_sel": (lambda: _niah(lengths=(30000,), per_length=100, seed=1), "exact", None),  # for searches
@@ -229,7 +240,7 @@ def rows(name):
     return out
 
 
-FINGERPRINT_BENCHES = ("math500", "gsm8k", "amc23", "aime24", "aime25", "mmlupro500", "ifeval")
+FINGERPRINT_BENCHES = ("math500", "gsm8k", "amc23", "aime24", "aime25", "mmlupro500", "ifeval", "bbh_all")
 
 
 def fingerprints(names=FINGERPRINT_BENCHES):
