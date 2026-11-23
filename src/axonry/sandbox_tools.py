@@ -61,7 +61,7 @@ def check(a):
     if size > MAX_TOTAL_BYTES:
         raise SystemExit(f"{out}: the upload's files total {size:,} bytes, over the {MAX_TOTAL_BYTES:,}-byte limit "
                          "(arrays belong in edit.npz, not inline in edit.json)")
-    with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
+    with tempfile.TemporaryDirectory() as tmp:     # never in the upload's directory: one left by a killed check is uploaded
         sid = start_of(task, json.loads((out / "edit.json").read_text()).get("parent"))
         if sid and not (out / sid / "edit" / "edit.json").exists():   # uploads only name the published start
             parent = Path(a.parent) if a.parent else task_path.parent / sid / "edit"

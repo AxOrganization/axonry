@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -58,3 +59,22 @@ def test_axonry_check_refuses_an_upload_over_the_size_limit(tmp_path):
     (up / "edit.npz").write_bytes(b"\0" * MAX_TOTAL_BYTES)
     with pytest.raises(SystemExit, match="over the 8,388,608-byte limit"):
         sandbox_tools.main(["check", str(up), "--task", str(tmp_path / "task.json"), "--base-dir", "unused"])
+
+
+def test_axonry_check_builds_outside_the_upload_directory(tmp_path, monkeypatch):
+    """wsp.upload sends every file under the delivery directory: a temporary tree left there by a check that was
+    killed (a tool timeout) would be uploaded and refused. The check builds elsewhere."""
+    from axonry import sandbox_tools
+    from axonry.evaluation import admit_remote
+    seen = []
+    monkeypatch.setattr(admit_remote, "admit", lambda d, *a: seen.append(Path(d)) or {"passed": True})
+    task = {"base": "b", "starts": [{"sid": "S1", "role": "parent"}], "base_name": "Org/B@1"}
+    (tmp_path / "task.json").write_text(json.dumps(task))
+    (tmp_path / "S1" / "edit").mkdir(parents=True)
+    (tmp_path / "S1" / "edit" / "edit.json").write_text("{}")
+    deliver = tmp_path / "deliver" / "case__E"
+    (deliver / "edit").mkdir(parents=True)
+    (deliver / "edit" / "edit.json").write_text(json.dumps({"base": "b", "parent": "S1", "ops": []}))
+    assert sandbox_tools.main(["check", str(deliver / "edit"), "--task", str(tmp_path / "task.json"),
+                               "--base-dir", "x"]) == 0
+    assert deliver not in seen[0].parents and tmp_path / "deliver" not in seen[0].parents
