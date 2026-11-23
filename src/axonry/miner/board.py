@@ -161,10 +161,15 @@ def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> s
                      key=lambda r: r.get("decided_at") or 0, reverse=True)[:n]
     benches = list(dict.fromkeys([*benchmarks, *(k for r in decided for k in r["scores"])]))
     rows = []
+    champ_line = (line or {}).get("champion") or {}
     for r in decided:
+        later = champ_line.get("accuracy") or {} if r["sid"] == champ_line.get("sid") else {}
         cells = []
         for k in benches:
             acc, tie_at, win_at, verdict = r["scores"].get(k, [None] * 4)
+            if acc is None and k in later:      # the champion, measured on it after its match: no thresholds
+                cells.append(f"{later[k]:.1f}")
+                continue
             text = "-" if acc is None else f"{acc:.1f}[{tie_at:.1f},{win_at:.1f}]"
             cells.append(st(text, {"win": GREEN, "lose": RED}.get(verdict, "")))
         won = r.get("decision") == "NEW_CHAMPION"
