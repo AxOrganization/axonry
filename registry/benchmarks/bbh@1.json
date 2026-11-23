@@ -1,0 +1,13 @@
+{
+ "adapter": "wsp",
+ "id": "bbh",
+ "items_manifest_sha256": "440cd390f06d54df3f343d74f2c034d49bc1523d8d6605776c24dd26ff2fe2a7",
+ "judge": {
+  "delta_win": 1.5,
+  "eps_tie": 1.0
+ },
+ "samples_per_item": 4,
+ "schema": "axonry.benchmark/1",
+ "task": "bench:bbh",
+ "version": 1
+}
