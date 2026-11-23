@@ -916,6 +916,22 @@ def test_our_outages_never_fail_a_ticket(tmp_path):
     assert s["status"] == "FAILED" and s["reason_code"] == "EVAL_ERROR"
 
 
+def test_board_shows_the_benchmarks_of_the_rules_in_force(tmp_path):
+    """A benchmark the rules in force add is a column before any entry is decided on it; entries decided under
+    rules without it show "-" there."""
+    from axonry.miner.board import board
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    run_until_quiet(orch, clock, rounds=6)
+    status, line = json.loads(pub.get(layout.STATUS)), json.loads(pub.get(layout.line(BASE)))
+    keys = [*orch.rules_for("0000000101-0001").benchmark_keys(), "extra@1"]
+    head, row = [l for l in board(status, line, color=False, benchmarks=keys).split("\n") if "DECIDED" in l
+                 or "0000000101-0001" in l and "[" in l][:2]
+    assert head.split()[-2:] == ["extra", "RESULT"] and row.split()[-3] == "-"
+
+
 def test_board(tmp_path):
     """axonry-miner board from public files only: champion + queue, not in queue (and why), recent matches with
     the not-worse / win thresholds; a deregistered champion shows its weight burned."""

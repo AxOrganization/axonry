@@ -83,7 +83,9 @@ def table(title, headers, rows, st, right=()):
     return "\n".join([st(title, BOLD), line(headers, True), rule, *(line(r) for r in rows)]) + "\n"
 
 
-def board(status: dict, line: dict | None, n=20, color=None) -> str:
+def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> str:
+    """benchmarks: those of the rules in force, shown even before an entry is decided on them ("-" where an entry
+    was decided under rules without one)."""
     st = Style(sys.stdout.isatty() and not os.environ.get("NO_COLOR") if color is None else color)
     miners = {m["hotkey"]: m for m in status.get("miners", [])}
     repo = status.get("repo")
@@ -152,7 +154,7 @@ def board(status: dict, line: dict | None, n=20, color=None) -> str:
     # 3. recent matches
     decided = sorted((r for r in (line or {}).get("entries", []) if r.get("scores")),
                      key=lambda r: r.get("decided_at") or 0, reverse=True)[:n]
-    benches = list(dict.fromkeys(k for r in decided for k in r["scores"]))
+    benches = list(dict.fromkeys([*benchmarks, *(k for r in decided for k in r["scores"])]))
     rows = []
     for r in decided:
         cells = []
@@ -333,7 +335,8 @@ def cmd_board(reader, n=20, color=None, watch=0, miner=None):
         elif miner:
             text = detail(reader, status, line, miner, color)
         else:
-            text = board(status, line, n, color)
+            rules = reader.rules() if reader.get(layout.INDEX) else None
+            text = board(status, line, n, color, [b["key"] for b in (rules or {}).get("benchmarks", [])])
         if status and reader.base:
             text += (f"\n\nMore detail: {DASHBOARD}\nData: {reader.base}/{layout.STATUS}")
         print(("\033[H\033[2J" if watch else "") + text, flush=True)
