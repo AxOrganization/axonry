@@ -843,6 +843,11 @@ def test_a_benchmark_added_later_is_generated_for_the_champion_it_meets(tmp_path
     assert d["reason_code"] == "NOT_DOMINATING" and d["record"]["reference"] == se
     assert set(d["record"]["scores"]) == set(orch.rules_for(sd).benchmark_keys())       # all six judged
     assert pub.get(layout.results(se, "extra@1"))
+    from axonry.miner.board import board
+    line = json.loads(pub.get(layout.line(BASE)))
+    assert set(line["champion"]["accuracy"]) == set(after)                    # the added one shown for it too
+    text = board(json.loads(pub.get(layout.STATUS)), line, color=False, benchmarks=orch.rules_for(sd).benchmark_keys())
+    assert "champion's accuracy:" in text and " extra " in text.split("champion's accuracy:")[1].split("\n")[0]
 
 
 def test_a_new_champion_without_an_entrys_benchmarks_is_evaluated_before_the_match(tmp_path):

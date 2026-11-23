@@ -131,6 +131,11 @@ def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> s
                      st(label, col), detail])
     out = [table("1. Champion and queue (priority order)", ["#", "UID", "HOTKEY", "SID", "PR", "STATUS", "DETAIL"],
                  rows, st, right=(0, 1))]
+    acc = ((line or {}).get("champion") or {}).get("accuracy")
+    if acc:     # every benchmark of the rules in force, including one added after it won ("-": none yet)
+        keys = list(dict.fromkeys([*benchmarks, *acc]))
+        out.append(st("  champion's accuracy: " + " · ".join(
+            f"{k.split('@')[0]} {acc[k]:.1f}" if k in acc else f"{k.split('@')[0]} -" for k in keys), DIM))
 
     # 2. not in queue
     rows, seen = [], set()
