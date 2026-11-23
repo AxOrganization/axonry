@@ -9,7 +9,7 @@ at or before a block is in force); the versions of one base form its line, whose
 new base starts its own line. A submission keeps the version in force when it entered the queue. Nothing else in the
 code names a concrete base or benchmark.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .common.canon import canonical, read_json, sha256_hex
@@ -46,6 +46,7 @@ class Benchmark:
 @dataclass(frozen=True)
 class Rules:
     doc: dict
+    root: Path = field(default=ROOT, compare=False)    # the registry it was read from (its benchmarks)
 
     @property
     def sha256(self):
@@ -57,7 +58,7 @@ class Rules:
     def judge_params(self, bench_key):
         """Per-benchmark thresholds: rules override > benchmark default."""
         entry = next(b for b in self.doc["benchmarks"] if b["key"] == bench_key)
-        return {**load_benchmark(bench_key).doc["judge"], **entry.get("judge", {})}
+        return {**load_benchmark(bench_key, self.root).doc["judge"], **entry.get("judge", {})}
 
     def __getitem__(self, k):
         return self.doc[k]
@@ -109,7 +110,7 @@ def load_rules_versions(base, root=ROOT):
         _need(doc, RULES_FIELDS, f"rules {p}")
         if doc["base"] != base:
             raise RegistryError(f"{p} declares base {doc['base']}")
-        out.append(Rules(doc))
+        out.append(Rules(doc, Path(root)))
     if not out:
         raise RegistryError(f"no rules for base {base}")
     return sorted(out, key=lambda r: r["effective_block"])

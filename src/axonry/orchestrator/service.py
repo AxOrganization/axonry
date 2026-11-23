@@ -806,15 +806,18 @@ class Orchestrator:
         named = " or ".join([*(repr(s) for s in starts), repr(task["base_name"])])
         return {}, f"edit.json parent must be {named}, not {ref!r}"
 
-    def _materialize_chain(self, sid, dest: Path):
+    def _materialize_chain(self, sid, dest: Path, as_admitted=False):
         """A published edit with its whole chain, as the toolkit builds it: submissions/<sid>/edit/ into dest, the
         edit it stacks on where its spec names it (a sid: dest/<sid>/edit/; an earlier path such as
         "parent/edit.json": there), and so on down the chain. A champion's archive form instead, when it has one: its
-        model as one edit on the base (flat/, with FLAT.json: its lineage) and its own REPORT.md."""
+        model as one edit on the base (flat/, with FLAT.json: its lineage) and its own REPORT.md - except, with
+        as_admitted, for the entry itself, whose admission is redone (its own edit, within the edit limits; the edits
+        below it may be archives)."""
         dest = Path(dest)
         rec = (self.db.sub(sid) or {}).get("record", {})
         edit, flat = layout.submission_edit_prefix(sid), layout.submission_flat_prefix(sid)
-        keys = ([(k, flat) for k, _ in self.d.public.list(flat)] + [(edit + "REPORT.md", edit)] if rec.get("flat")
+        archived = rec.get("flat") and not as_admitted
+        keys = ([(k, flat) for k, _ in self.d.public.list(flat)] + [(edit + "REPORT.md", edit)] if archived
                 else [(k, edit) for k, _ in self.d.public.list(edit)])
         for k, prefix in keys:
             data = self.d.public.get(k)
@@ -822,7 +825,7 @@ class Orchestrator:
                 (dest / k[len(prefix):]).parent.mkdir(parents=True, exist_ok=True)
                 (dest / k[len(prefix):]).write_bytes(data)
         ref = json.loads((dest / "edit.json").read_text()).get("parent")
-        if rec.get("parent") and ref and not rec.get("flat"):
+        if rec.get("parent") and ref and not archived:
             where = dest / Path(ref).parent if ref.endswith(".json") else dest / ref / "edit"
             self._materialize_chain(rec["parent"], where)
 
@@ -922,9 +925,10 @@ class Orchestrator:
             for model_id, benches in todo:
                 if model_id in jobs or not idle:
                     continue
-                if model_id == s["sid"]:
-                    here = [n for n in idle if self._machine_id(n) in self._holders(s)]
-                    if not here and idle and self._rebuild(idle[0], s, rules):
+                if not model_id.startswith("base:"):          # an entry's model: where it is built
+                    m = s if model_id == s["sid"] else self.db.sub(model_id)
+                    here = [n for n in idle if self._machine_id(n) in self._holders(m)]
+                    if not here and idle and self._rebuild(idle[0], m, rules):
                         here = idle[:1]          # its machine is busy or gone: built again on an idle one
                     if not here:
                         continue
@@ -949,8 +953,9 @@ class Orchestrator:
         return s["record"].get("built_on") or [self._machine_id(EVAL)]     # before built_on: admitted on eval
 
     def _rebuild(self, on, s, rules) -> bool:
-        """A candidate next in line while the machine holding its model is busy (or gone): admission builds it again on
-        an idle one, so the queue spreads over every evaluation machine. The same spec; the build may differ in its
+        """A candidate next in line while the machine holding its model is busy (or gone), or the champion it meets
+        when it lacks results on benchmarks added since: admission builds it again on an idle one, so the queue spreads
+        over every evaluation machine. The same spec; the build may differ in its
         last bits, so the new model and digest are the ones evaluated (the admitted digest is kept beside). Ours if it
         fails: logged, tried again next tick."""
         sid = s["sid"]
@@ -958,7 +963,7 @@ class Orchestrator:
         try:
             if not (build / "edit.json").exists():     # cleaned up (it ended once): its published edit and chain
                 shutil.rmtree(build, ignore_errors=True)
-                self._materialize_chain(sid, build)
+                self._materialize_chain(sid, build, as_admitted=True)
             adm = self.d.executor.admit(on, sid, build, registry.load_base(rules["base"], self.d.registry_root))
             if not adm.get("passed"):
                 raise RuntimeError("; ".join(adm.get("violations") or [])[:300])
@@ -982,9 +987,11 @@ class Orchestrator:
         row = self.d.fleet.get(name)
         return row and row["provider_id"]
 
-    @staticmethod
-    def _models(s, rules) -> list:
-        return [f"base:{rules['base']}", s["sid"]]          # every champion was evaluated as an entry
+    def _models(self, s, rules) -> list:
+        """The models an entry's match needs results of, under its rules: the base, the champion it meets (evaluated
+        as an entry, but a later rules version may add benchmarks: those are generated for it then) and itself."""
+        champ = (self.db.champion(rules["base"]) or {}).get("sid")
+        return [f"base:{rules['base']}", *([champ] if champ and champ != s["sid"] else []), s["sid"]]
 
     def _missing(self, model_id, rules) -> list:
         have = self.db.results(model_id)
@@ -1028,8 +1035,8 @@ class Orchestrator:
         self.db.set("eval_jobs", jobs)
 
     def _eval_failed(self, s, model_id, e):
-        if model_id.startswith("base:"):   # the base model's own job: always ours
-            return self._backoff(s, f"base evaluation: {e}")
+        if model_id != s["sid"]:           # the base's or the champion's job: always ours
+            return self._backoff(s, f"evaluation of {model_id}: {e}")
         return self._failed(s, "evaluation", e)
 
     def _scored(self, s):
@@ -1068,9 +1075,16 @@ class Orchestrator:
             rec, base = s["record"], s["base"]
             committed = rec["timeline"]["committed"]
             if s["status"] == "SCORED" and not public.get(base, float("inf")) <= committed:
-                self._decide_one(s)
-            else:
-                public[base] = min(public.get(base, float("inf")), rec.get("public_at", committed))
+                champ = self.db.champion(base)
+                ref = champ["sid"] if champ else f"base:{base}"
+                if not self._missing(ref, self.rules_for(s["sid"])):
+                    self._decide_one(s)
+                    continue
+                # the champion of this moment came after it was scored and lacks some of its rules' benchmarks:
+                # evaluated again for those (its own results stand), then decided
+                log.info("%s: champion %s lacks results of its benchmarks: evaluated first", s["sid"], ref)
+                self.db.update(s["sid"], "ADMITTED")
+            public[base] = min(public.get(base, float("inf")), rec.get("public_at", committed))
 
     @staticmethod
     def _salt(rules):

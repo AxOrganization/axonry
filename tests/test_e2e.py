@@ -795,6 +795,83 @@ def test_stacking_on_a_published_parent(tmp_path):
     assert not (chain / sa).exists() and json.loads((chain / "edit.json").read_text())["parent"].startswith("Qwen/")
 
 
+def _add_benchmark_version(orch, block):
+    """A later rules version of the line, from `block`, judging one more benchmark (extra@1)."""
+    from axonry.common.canon import write_json
+    root = Path(orch.d.registry_root)
+    first = next((root / "benchmarks").glob("*.json"))
+    write_json(root / "benchmarks" / "extra@1.json", {**json.loads(first.read_text()), "id": "extra", "version": 1,
+                                                      "task": "bench:extra"})
+    rules = json.loads(next((root / "rules" / BASE).glob("*.json")).read_text())
+    write_json(root / "rules" / BASE / "v2.json", {**rules, "effective_block": block,
+                                                   "benchmarks": rules["benchmarks"] + [{"key": "extra@1"}]})
+    orch.bootstrap()                                    # a new rules version comes with a deploy
+
+
+def test_a_benchmark_added_later_is_generated_for_the_champion_it_meets(tmp_path):
+    """The champion was evaluated under rules without extra@1. An entry under the rules that add it meets that
+    champion: the champion's model is built again as admitted (its own edit, not its archive, which only builds as a
+    start) where it is evaluated on extra@1 alone, then the match uses all six; its earlier results stand."""
+    from axonry.pool.machine import EVAL
+    orch, chain, clock, pub = make(tmp_path)
+    pay(orch, chain, "A", 101, 1)
+    chain.head = 101
+    open_rules(orch, 101)
+    run_until_quiet(orch, clock, rounds=6)
+    sa = "0000000101-0001"
+    pay(orch, chain, "E", 110, 1, parent=sa)
+    chain.head = 110
+    orch.intake()
+    run_until_quiet(orch, clock, rounds=6)
+    se = "0000000110-0001"
+    assert orch.db.champion(BASE)["sid"] == se and orch.db.sub(se)["record"]["flat"]      # archived
+    before = orch.db.results(se)
+    assert "extra@1" not in before
+    orch.db.update(se, record_patch={"built_on": ["gone-machine"]})   # its evaluation machine is gone since
+    _add_benchmark_version(orch, 120)
+    pay(orch, chain, "D", 121, 1)
+    chain.head = 121
+    orch.intake()
+    sd = "0000000121-0001"
+    assert "extra@1" in orch.rules_for(sd).benchmark_keys() and "extra@1" not in orch.rules_for(se).benchmark_keys()
+    run_until_quiet(orch, clock, rounds=8)
+    after = orch.db.results(se)
+    assert set(after) == set(before) | {"extra@1"} and all(after[k] == before[k] for k in before)
+    rec = orch.db.sub(se)["record"]
+    assert rec["built_on"] != ["gone-machine"] and rec["admitted_digest"]          # built again where evaluated
+    d = orch.db.sub(sd)
+    assert d["reason_code"] == "NOT_DOMINATING" and d["record"]["reference"] == se
+    assert set(d["record"]["scores"]) == set(orch.rules_for(sd).benchmark_keys())       # all six judged
+    assert pub.get(layout.results(se, "extra@1"))
+
+
+def test_a_new_champion_without_an_entrys_benchmarks_is_evaluated_before_the_match(tmp_path):
+    """K (old rules) was public before L (rules adding extra@1) committed, so L, scored first, waits for K. K becomes
+    champion with no extra@1 results: L goes back to evaluation for K's, then is decided against K on all six."""
+    orch, chain, clock, pub = make(tmp_path)
+    gh = orch.d.github
+    gh.approve_all = False
+    nk = pay(orch, chain, "A", 101, 1)                  # K: plan A
+    chain.head = 101
+    open_rules(orch, 101)
+    sk = "0000000101-0001"
+    _add_benchmark_version(orch, 120)
+    nl = pay(orch, chain, "D", 121, 1)                  # L: plan D (not better than A)
+    chain.head = 121
+    orch.intake()
+    sl = "0000000121-0001"
+    gh.verdicts[(nl, content_digest_of_blobs(blobs_for("D")))] = "approved"
+    run_until_quiet(orch, clock, rounds=6)
+    assert orch.db.sub(sl)["status"] == "SCORED" and orch.db.sub(sk)["status"] == "REVIEW"      # held by K
+    gh.verdicts[(nk, content_digest_of_blobs(blobs_for("A")))] = "approved"
+    run_until_quiet(orch, clock, rounds=8)
+    assert orch.db.sub(sk)["reason_code"] == "NEW_CHAMPION"                 # decided on the old rules' five
+    assert "extra@1" in orch.db.results(sk)                                 # generated for L's match
+    l = orch.db.sub(sl)
+    assert l["record"]["reference"] == sk and set(l["record"]["scores"]) == set(orch.rules_for(sl).benchmark_keys())
+    assert l["reason_code"] == "NOT_DOMINATING"
+
+
 def test_a_parent_that_can_never_qualify_rejects(tmp_path):
     """A parent that is not a submission at all can never become one: the entry is rejected, uncharged."""
     orch, chain, clock, pub = make(tmp_path)
