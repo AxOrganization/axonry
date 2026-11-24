@@ -45,7 +45,10 @@ def fleet(cfg, db, rules):
     root = Path(__file__).resolve().parents[3]
     memo = {}
 
-    benches = [registry.load_benchmark(k).doc for k in rules.benchmark_keys()]
+    # every benchmark of every rules version of the line: an entry is judged under the version it entered with, so
+    # one benchmark a newer version dropped is still evaluated for it (and its champion)
+    keys = dict.fromkeys(k for r in registry.load_rules_versions(rules["base"]) for k in r.benchmark_keys())
+    benches = [registry.load_benchmark(k).doc for k in keys]
 
     def bundle():   # built once per process, from this checkout and the pinned competition repo
         if "path" not in memo:
