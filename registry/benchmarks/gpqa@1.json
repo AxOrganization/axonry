@@ -1,0 +1,13 @@
+{
+ "adapter": "wsp",
+ "id": "gpqa",
+ "items_manifest_sha256": "5b04eb6f5bb9b1428bf4149b68fa751a2eec79c56d3920ef2423a0764b49b6e6",
+ "judge": {
+  "delta_win": 3.0,
+  "eps_tie": 1.0
+ },
+ "samples_per_item": 4,
+ "schema": "axonry.benchmark/1",
+ "task": "bench:gpqa",
+ "version": 1
+}

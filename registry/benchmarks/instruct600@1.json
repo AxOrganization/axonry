@@ -1,0 +1,13 @@
+{
+ "adapter": "wsp",
+ "id": "instruct600",
+ "items_manifest_sha256": "5a30371e4df2728e659956695a105f78789e94c005da4662d2b7ab968aa4a94b",
+ "judge": {
+  "delta_win": 1.5,
+  "eps_tie": 1.0
+ },
+ "samples_per_item": 4,
+ "schema": "axonry.benchmark/1",
+ "task": "bench:instruct600",
+ "version": 1
+}
