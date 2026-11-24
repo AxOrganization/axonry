@@ -13,11 +13,10 @@ def machine_in(tmp_path, monkeypatch):
     ex._ssh = lambda on, cmd, timeout=600, binary=False: subprocess.run(
         ["bash", "-c", cmd], capture_output=True, text=True, check=True).stdout
 
-    def scp(m, key, srcs, dst, timeout=1800, attempts=3):
-        for s in srcs:
-            sent.append(Path(s).name)
-            Path(dst).write_bytes(Path(s).read_bytes())
-    monkeypatch.setattr(ex_mod.machines, "scp", scp)
+    def send_file(m, key, src, dst, timeout=900, attempts=12):
+        sent.append(Path(src).name)
+        Path(dst).write_bytes(Path(src).read_bytes())
+    monkeypatch.setattr(ex_mod.machines, "send_file", send_file)
     return ex, sent
 
 
@@ -41,22 +40,22 @@ def test_a_start_placed_in_many_builds_is_sent_once(tmp_path, monkeypatch):
 
 def test_a_cut_transfer_keeps_what_completed_and_a_retry_sends_the_rest(tmp_path, monkeypatch):
     ex, sent = machine_in(tmp_path, monkeypatch)
-    plain = ex_mod.machines.scp
+    plain = ex_mod.machines.send_file
     done = []
 
-    def cut(m, key, srcs, dst, timeout=1800, attempts=3):
+    def cut(m, key, src, dst, timeout=900, attempts=12):
         if done:                                                   # the second file sent: the link drops
-            raise ex_mod.machines.MachineError("eval: scp timed out")
-        plain(m, key, srcs, dst)
-        done.append(Path(srcs[0]).name)
-    monkeypatch.setattr(ex_mod.machines, "scp", cut)
+            raise ex_mod.machines.MachineError("eval: not complete")
+        plain(m, key, src, dst)
+        done.append(Path(src).name)
+    monkeypatch.setattr(ex_mod.machines, "send_file", cut)
     d = build(tmp_path, "a", "one")
     try:
         ex.push_dir("eval", d, "0000000001-0001", "edit")
         raise AssertionError("expected the cut")
     except ex_mod.ExecError:
         pass
-    monkeypatch.setattr(ex_mod.machines, "scp", plain)
+    monkeypatch.setattr(ex_mod.machines, "send_file", plain)
     sent.clear()
     ex.push_dir("eval", d, "0000000001-0001", "edit")
     assert len(done) == 1 and sent == [n for n in ("edit.json", "edit.npz") if n not in done]   # only the rest
@@ -71,3 +70,33 @@ def test_the_same_content_at_two_paths_is_sent_once_and_placed_at_both(tmp_path,
     out = Path(ex.root) / "eval" / "0000000001-0001" / "edit"
     assert (out / "edit.json").read_text() == (out / "S1" / "edit" / "REPORT.md").read_text() == "one"
     assert sorted(sent) == ["REPORT.md", "edit.npz"] or sorted(sent) == ["edit.json", "edit.npz"]
+
+
+def test_send_file_resumes_a_cut_transfer_where_it_stopped(tmp_path, monkeypatch):
+    from axonry.pool import machine as M
+
+    class Box:
+        name, ssh = "eval", "root@box"
+
+        def ssh_args(self, key):
+            return []
+    src, dst = tmp_path / "big.npz", tmp_path / "remote.part"
+    src.write_bytes(bytes(range(256)) * 400)
+    monkeypatch.setattr(M, "ssh", lambda m, key, cmd, timeout=900: subprocess.run(
+        ["bash", "-c", cmd], capture_output=True, text=True, check=True).stdout)
+    appended, real = [], subprocess.run
+
+    def run(argv, stdin=None, timeout=None, **kw):     # `ssh ... cat >> dst`: half delivered, then the cut
+        if not argv[-1].startswith("cat >>"):
+            return real(argv, stdin=stdin, timeout=timeout, **kw)
+        data = stdin.read()
+        appended.append(len(data))
+        with open(dst, "ab") as f:
+            f.write(data if len(appended) > 1 else data[:len(data) // 2])
+        if len(appended) == 1:
+            raise subprocess.TimeoutExpired(argv, timeout)
+    monkeypatch.setattr(M.subprocess, "run", run)
+    monkeypatch.setattr(M.time, "sleep", lambda s: None)
+    M.send_file(Box(), "k", src, str(dst))
+    assert dst.read_bytes() == src.read_bytes()
+    assert appended == [102400, 51200]          # the second attempt sends only what the first did not deliver

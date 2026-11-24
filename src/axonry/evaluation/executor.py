@@ -127,10 +127,11 @@ class SshExecutor:
         try:
             for h in sorted(missing):                    # each content sent once, then placed wherever it goes
                 p = next(p for p, h2 in files.values() if h2 == h)
-                machines.scp(self.machine(on), self.key, [p], f"{cache}/{h}.part", timeout=900)
+                machines.send_file(self.machine(on), self.key, p, f"{cache}/{h}.part")   # resumes a cut transfer
                 place = " && ".join(f"cp {cache}/{h} {q(f'{dst}/{rel}')}" for rel, (_, h2) in files.items() if h2 == h)
-                self._ssh(on, f"test \"$(sha256sum {cache}/{h}.part | cut -d' ' -f1)\" = {h} && "
-                              f"mv {cache}/{h}.part {cache}/{h} && {place}", timeout=300)
+                self._ssh(on, f"if test \"$(sha256sum {cache}/{h}.part | cut -d' ' -f1)\" = {h}; then "
+                              f"mv {cache}/{h}.part {cache}/{h} && {place}; else rm -f {cache}/{h}.part; exit 1; fi",
+                          timeout=300)
         except machines.MachineError as e:
             raise ExecError(f"eval host {on}: {e}") from e
 

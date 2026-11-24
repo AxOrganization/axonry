@@ -169,6 +169,32 @@ def scp(m: Machine, key, srcs, dst: str, timeout=1800, attempts=3):
     raise MachineError(f"{m.name}: scp failed: {r.stderr.strip()[-500:]}")
 
 
+def send_file(m: Machine, key, src, dst: str, timeout=900, attempts=12):
+    """Copy one local file to dst on the machine, resuming: each attempt appends what dst still lacks, so a slow link
+    gets there across attempts (a cut one never starts over). The caller checks the content (sha256)."""
+    import shlex  # noqa: PLC0415
+    size, q = Path(src).stat().st_size, shlex.quote(dst)
+    for _ in range(attempts):
+        try:
+            have = int(ssh(m, key, f"stat -c %s {q} 2>/dev/null || echo 0", timeout=120).strip() or 0)
+        except (MachineError, ValueError):
+            time.sleep(10)
+            continue
+        if have == size:
+            return
+        if have > size:
+            ssh(m, key, f"rm -f {q}", timeout=120)
+            have = 0
+        with open(src, "rb") as f:
+            f.seek(have)
+            try:
+                subprocess.run(["ssh", *m.ssh_args(key), m.ssh, f"cat >> {q}"], stdin=f, capture_output=True,
+                               timeout=timeout)
+            except subprocess.TimeoutExpired:
+                time.sleep(10)          # the cut transfer's last bytes land before the next attempt measures dst
+    raise MachineError(f"{m.name}: {Path(src).name} not complete after {attempts} attempts")
+
+
 def rsync(m: Machine, key, src, dst: str, timeout=3600, attempts=3):
     """Copy one local file to dst on the machine as a delta against what dst already holds (rsync over ssh)."""
     import shlex  # noqa: PLC0415
