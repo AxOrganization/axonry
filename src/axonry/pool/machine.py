@@ -29,11 +29,15 @@ def eval_names(n: int) -> list:
 def is_eval(purpose: str) -> bool:
     return purpose == EVAL or purpose.startswith(f"{EVAL}-")
 HERE = Path(__file__).parent
-# IFEval's sentence tokenizer (nltk punkt_tab; sha256 as nltk's data index lists it). Fetched here and shipped in the
-# setup bundle: the downloader's source is unreachable from some machines, and a grader's data must not change.
-NLTK_PUNKT = ("e57f64187974277726a3417ca6f181ec5403676c717672eef6a748a7b20e0106",
-              ("https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt_tab.zip",
-               "https://cdn.jsdelivr.net/gh/nltk/nltk_data@gh-pages/packages/tokenizers/punkt_tab.zip"))
+# The graders' nltk data (IFEval's sentence tokenizer; IFBench's stopwords and tagger): (directory, sha256 as nltk's
+# data index lists it). Fetched here and shipped in the setup bundle: the downloader's source is unreachable from some
+# machines, and a grader's data must not change.
+NLTK_DATA = {"punkt_tab": ("tokenizers", "e57f64187974277726a3417ca6f181ec5403676c717672eef6a748a7b20e0106"),
+             "stopwords": ("corpora", "48c0e52d8b52546e827f53761fb30300c0ab94f70660d28bd65ba0a86270946b"),
+             "averaged_perceptron_tagger_eng": ("taggers",
+                                                "6025f530624335c67d6547d44757b357b4e79bae030a0383e9887a92c1718f0b")}
+NLTK_SOURCES = ("https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/{}/{}.zip",
+                "https://cdn.jsdelivr.net/gh/nltk/nltk_data@gh-pages/packages/{}/{}.zip")
 
 
 class MachineError(RuntimeError):
@@ -219,21 +223,21 @@ def keypair(comment: str):
         return p.read_text(), p.with_suffix(".pub").read_text().strip()
 
 
-def punkt_tab(cache: Path) -> bytes:
-    """nltk's punkt_tab.zip, sha256-checked (cached)."""
+def nltk_zip(name: str, cache: Path) -> bytes:
+    """One of NLTK_DATA's zips, sha256-checked (cached)."""
     import urllib.request  # noqa: PLC0415
-    sha, urls = NLTK_PUNKT
+    sub, sha = NLTK_DATA[name]
     if cache.exists() and hashlib.sha256(cache.read_bytes()).hexdigest() == sha:
         return cache.read_bytes()
-    for url in urls:
+    for url in NLTK_SOURCES:
         try:
-            data = urllib.request.urlopen(url, timeout=120).read()
+            data = urllib.request.urlopen(url.format(sub, name), timeout=120).read()
         except OSError:
             continue
         if hashlib.sha256(data).hexdigest() == sha:
             cache.write_bytes(data)
             return data
-    raise MachineError("nltk punkt_tab: no source served the pinned file")
+    raise MachineError(f"nltk {name}: no source served the pinned file")
 
 
 NOT_BUNDLED = ("axonry/benchmarks/sources.py",)   # where the benchmark items come from: the organizer's only
@@ -272,7 +276,8 @@ def setup_bundle(project: Path, competition: Path, base_docs: list, bench_docs: 
         for doc in base_docs:
             add(f"bases/{base_dirname(doc)}.json", json.dumps(doc).encode())
         add("benchmarks.json", json.dumps(benchdata.spec(bench_docs)).encode())
-        add("punkt_tab.zip", punkt_tab(dest.parent / "punkt_tab.zip"))
+        for name, (sub, _) in NLTK_DATA.items():
+            add(f"nltk/{sub}/{name}.zip", nltk_zip(name, dest.parent / f"{name}.zip"))
     return dest
 
 

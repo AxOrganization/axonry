@@ -32,13 +32,16 @@ fi
 
 # pinned: graders and loaders must not change under a rules version (verified together, 2026-11-16)
 pip install -q --no-cache-dir math-verify==0.9.0 lm-eval==0.4.13 langdetect==1.0.9 immutabledict==4.3.1 nltk==3.10.4 \
-  datasets==5.2.0 flash-linear-attention==0.6.0 boto3==1.43.123
-# IFEval's sentence tokenizer, from the bundle (pinned by the orchestrator); nltk reads no data that other accounts
-# could have written
-mkdir -p /usr/share/nltk_data/tokenizers
-python3 -m zipfile -e "$B/punkt_tab.zip" /usr/share/nltk_data/tokenizers/
-chmod -R go-w /usr/share/nltk_data
-NLTK_DATA=/usr/share/nltk_data python3 -c "import nltk; nltk.data.find('tokenizers/punkt_tab/english/')"
+  datasets==5.2.0 flash-linear-attention==0.6.0 boto3==1.43.123 emoji==2.16.0 syllapy==0.8.0
+# the graders' nltk data, from the bundle (pinned by the orchestrator): nltk/<directory>/<package>.zip; nltk reads no
+# data that other accounts could have written
+for z in "$B"/nltk/*/*.zip; do
+  d=/usr/share/nltk_data/$(basename "$(dirname "$z")")
+  mkdir -p "$d" && python3 -m zipfile -e "$z" "$d/"
+done
+chown -R root:root /usr/share/nltk_data && chmod -R go-w /usr/share/nltk_data
+NLTK_DATA=/usr/share/nltk_data python3 -c "import nltk; [nltk.data.find(p) for p in ('tokenizers/punkt_tab/english/', \
+  'corpora/stopwords', 'taggers/averaged_perceptron_tagger_eng')]"
 pip install -q --no-cache-dir --no-deps "$B/axonry.tar.gz"
 command -v python >/dev/null || ln -s "$(command -v python3)" /usr/local/bin/python   # the image has python3 only
 for t in time check done; do

@@ -197,6 +197,54 @@ def _ifeval():
             for r in _hf("google/IFEval", split="train")]
 
 
+def _github(repo, commit, path, sha256):
+    """A file of a GitHub repository at a pinned commit, checked against its sha256."""
+    import hashlib  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+    with urllib.request.urlopen(f"https://raw.githubusercontent.com/{repo}/{commit}/{path}", timeout=120) as r:
+        data = r.read()
+    if hashlib.sha256(data).hexdigest() != sha256:
+        raise ValueError(f"{repo}@{commit[:12]}/{path}: sha256 {hashlib.sha256(data).hexdigest()[:16]}, not the pinned")
+    return data
+
+
+def _ifbench():
+    """IFBench (AllenAI, 2025): its 300 test prompts, graded by its own checkers (the toolkit's task "ifbench")."""
+    import json  # noqa: PLC0415
+    raw = _github("allenai/IFBench", "488918665d53f867fa908a293769ec6e71e74aec", "data/IFBench_test.jsonl",
+                  "d2ada7da94a38cfe406351614c4e686846ed2da6d1b339db95fa5ead19554a4a")
+    return [{"id": f"ifbench_{r['key']}", "task": "ifbench", "problem": r["prompt"], "answer": None,
+             "instruction_id_list": r["instruction_id_list"],
+             "kwargs": [{k: v for k, v in (d or {}).items() if v is not None} for d in r["kwargs"]]}
+            for r in map(json.loads, raw.decode().splitlines()) if r]
+
+
+def _instruct600(n_ifeval=300, seed=0):
+    """Instruction following: n_ifeval IFEval prompts (a seeded sample, in IFEval's order) and every IFBench one."""
+    ife = _ifeval()
+    return [{**ife[i], "task": "ifeval"} for i in sorted(random.Random(seed).sample(range(len(ife)), n_ifeval))] + _ifbench()
+
+
+def _gpqa(subset="diamond", seed=0):
+    """GPQA (Rein et al. 2023) from its authors' repository (dataset.zip, password as its README gives it): the four
+    answers of each question in a seeded order, the letter of the correct one the answer."""
+    import csv  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    import zipfile  # noqa: PLC0415
+    z = zipfile.ZipFile(io.BytesIO(_github("idavidrein/gpqa", "56686c06f5e19865c153de0fdb11be3890014df7", "dataset.zip",
+                                           "461ae7329f15a3e35f8184d2dac24b990f34fdf12f366ca4062d8e6638cd08dc")))
+    text = z.read(f"dataset/gpqa_{subset}.csv", pwd=b"deserted-untie-orchid").decode()
+    rng, out = random.Random(seed), []
+    for r in csv.DictReader(io.StringIO(text)):
+        answers = [r["Correct Answer"]] + [r[f"Incorrect Answer {k}"] for k in (1, 2, 3)]
+        order = rng.sample(range(4), 4)
+        out.append({"id": f"gpqa_{r['Record ID']}", "problem": r["Question"].strip(),
+                    "answer": chr(65 + order.index(0)),
+                    "options": "\n".join(f"{chr(65 + j)}. {answers[k].strip()}" for j, k in enumerate(order)),
+                    "subject": r["High-level domain"]})
+    return out
+
+
 # name -> (loader, task, number of items kept (None = all))
 BENCHMARKS = {
     "math500": (_math500, "math", None),
@@ -207,6 +255,10 @@ BENCHMARKS = {
     "aime25": (_qa("MathArena/aime_2025", "train", "aime25", q="problem"), "math", None),
     "mmlupro500": (_mmlupro, "choice", None),
     "ifeval": (_ifeval, "ifeval", None),
+    "ifbench": (_ifbench, "ifbench", None),
+    "instruct600": (_instruct600, None, None),        # each item's own task: "ifeval" or "ifbench"
+    "gpqa": (_gpqa, "choice", None),
+    "gpqa_all": (lambda: _gpqa("extended"), "choice", None),  # fingerprints only (main and diamond are in it)
     "bbh": (_bbh, "exact", None),
     "bbh_all": (_bbh_all, "exact", None),  # fingerprints only
     "mgsm": (_mgsm, "math", None),
@@ -240,7 +292,8 @@ def rows(name):
     return out
 
 
-FINGERPRINT_BENCHES = ("math500", "gsm8k", "amc23", "aime24", "aime25", "mmlupro500", "ifeval", "bbh_all")
+FINGERPRINT_BENCHES = ("math500", "gsm8k", "amc23", "aime24", "aime25", "mmlupro500", "ifeval", "bbh_all", "ifbench",
+                       "gpqa_all")
 
 
 def fingerprints(names=FINGERPRINT_BENCHES):
