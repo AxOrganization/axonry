@@ -57,7 +57,9 @@ def _built(competition: Path, s: list, work: str) -> dict:
     """write_items in a child process importing the pinned toolkit -> {key: items sha256}."""
     r = subprocess.run([sys.executable, "-m", "axonry.evaluation.benchdata", "build"], input=json.dumps(s),
                        capture_output=True, text=True,
-                       env={**os.environ, "PYTHONPATH": str(Path(competition).resolve()), "WSP_WORK": work})
+                       env={**os.environ, "WSP_WORK": work,         # the toolkit pinned, and this very axonry
+                            "PYTHONPATH": os.pathsep.join([str(Path(competition).resolve()),
+                                                           str(Path(__file__).resolve().parents[2])])})
     if r.returncode != 0:
         raise RuntimeError(f"benchmark items: {(r.stdout + r.stderr).strip()[-600:]}")
     return json.loads(r.stdout.strip().splitlines()[-1])
