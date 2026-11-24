@@ -235,7 +235,9 @@ def test_benchmark_items_are_built_checked_and_packed(tmp_path, monkeypatch):
     docs = [{"id": "amc23", "version": 1, "task": "bench:amc23", "items_manifest_sha256": "m-bench:amc23"}]
     out = benchdata.build(tmp_path / "comp", docs, tmp_path / "state")
     with tar_mod.open(out) as tf:
-        assert tf.getnames() == ["data", "data/bench_amc23.jsonl"]
+        names = tf.getnames()
+    assert names[:2] == ["data", "data/bench_amc23.jsonl"]
+    assert "graders/ifbench/instructions_registry.py" in names and not any("__pycache__" in x for x in names)
     assert benchdata.build(tmp_path / "comp", docs, tmp_path / "state") == out    # built once
     bad = [{**docs[0], "items_manifest_sha256": "frozen-other"}]
     with pytest.raises(RuntimeError, match="amc23@1: items m-bench:amc2 != frozen frozen-other"):
@@ -282,7 +284,7 @@ def test_a_pack_in_an_older_layout_is_built_again(tmp_path, monkeypatch):
     from axonry.evaluation import benchdata
     docs = [{"id": "gsm8k500", "version": 1, "task": "bench:gsm8k500", "items_manifest_sha256": "m-bench:gsm8k500"}]
     s = benchdata.spec(docs)
-    old = tmp_path / "state" / f"benchdata-{__import__('hashlib').sha256(json.dumps(s, sort_keys=True).encode()).hexdigest()[:12]}.tar"
+    old = benchdata.pack_path(tmp_path / "state", s)
     old.parent.mkdir(parents=True)
     src = tmp_path / "old" / "data"
     src.mkdir(parents=True)
@@ -299,7 +301,9 @@ def test_a_pack_in_an_older_layout_is_built_again(tmp_path, monkeypatch):
     monkeypatch.setattr(benchdata, "_built", built)
     out = benchdata.build(tmp_path / "comp", docs, tmp_path / "state")
     with tar_mod.open(out) as tf:
-        assert sorted(tf.getnames()) == ["data", "data/bench_gsm8k500.jsonl"]
+        names = sorted(tf.getnames())
+    assert out == old and names[:2] == ["data", "data/bench_gsm8k500.jsonl"] and "data/bench_gsm8k.jsonl" not in names
+    assert any(x.startswith("graders/") for x in names)
 
 
 def test_the_items_are_published_beside_their_definitions(tmp_path):

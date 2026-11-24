@@ -70,10 +70,19 @@ def manifests(competition: Path, tasks: list) -> dict:
     return got
 
 
+GRADERS = Path(__file__).resolve().parents[3] / "graders"   # ours, beside the items: evaluation machines only
+
+
+def _graders():
+    """{name in the pack: file} of graders/ (the checkers of tasks the toolkit does not grade, e.g. "ifbench")."""
+    return {f"graders/{p.relative_to(GRADERS).as_posix()}": p for p in sorted(GRADERS.rglob("*"))
+            if p.is_file() and "__pycache__" not in p.parts}
+
+
 def _holds(pack: Path, s: list) -> bool:
-    """A pack built before holds exactly the files the toolkit reads now (one per benchmark): one in an older layout
-    is built again."""
-    want = {"data"} | {f"data/bench_{b['task'].split(':', 1)[1]}.jsonl" for b in s}
+    """A pack built before holds exactly the files evaluation reads now (one per benchmark, and graders/ as it is):
+    one in an older layout is built again."""
+    want = {"data"} | {f"data/bench_{b['task'].split(':', 1)[1]}.jsonl" for b in s} | set(_graders())
     try:
         with tarfile.open(pack) as tf:
             return set(tf.getnames()) == want
@@ -81,11 +90,19 @@ def _holds(pack: Path, s: list) -> bool:
         return False
 
 
+def pack_path(dest_dir, s) -> Path:
+    """Where the pack of these benchmarks (spec) and the graders as they are now is kept: a changed grader is a new
+    pack."""
+    graders = {name: hashlib.sha256(f.read_bytes()).hexdigest() for name, f in _graders().items()}
+    key = json.dumps([s, graders], sort_keys=True).encode()
+    return Path(dest_dir) / f"benchdata-{hashlib.sha256(key).hexdigest()[:12]}.tar"
+
+
 def build(competition: Path, bench_docs, dest_dir: Path) -> Path:
     """-> benchdata-<sha>.tar (data/bench_*.jsonl), built once per set of benchmarks, only when every benchmark's
     items match its frozen manifest."""
     s = spec(bench_docs)
-    out = Path(dest_dir) / f"benchdata-{hashlib.sha256(json.dumps(s, sort_keys=True).encode()).hexdigest()[:12]}.tar"
+    out = pack_path(dest_dir, s)
     if out.exists() and _holds(out, s):
         return out
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +115,8 @@ def build(competition: Path, bench_docs, dest_dir: Path) -> Path:
         tmp = out.with_suffix(".tmp")
         with tarfile.open(tmp, "w") as tf:
             tf.add(Path(work) / "data", arcname="data")
+            for name, f in _graders().items():
+                tf.add(f, arcname=name)
         tmp.replace(out)
     return out
 

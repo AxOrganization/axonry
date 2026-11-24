@@ -98,3 +98,21 @@ def test_grading_runs_in_the_main_thread(tmp_path):
     assert seen == {True}
     rows = [json.loads(x) for x in (tmp_path / "a@1.jsonl").read_text().splitlines()]
     assert all(r["correct"] for r in rows) and all(r["text"] == "x ok" for r in rows)
+
+
+def test_a_grader_that_cannot_run_stops_the_run_instead_of_scoring_wrong(tmp_path):
+    import pytest
+
+    class GraderError(RuntimeError):
+        pass
+
+    def broken(r, text, finish):
+        if r["id"] == "a1":
+            raise GraderError("nltk data missing")
+        if r["id"] == "a2":
+            raise ValueError("an answer the checker cannot read")
+        return {"correct": True}
+    with pytest.raises(GraderError):
+        run_stream(reqs(), lambda p, s: (p + " ok", "stop", 3), broken, tmp_path, concurrency=1, fatal=(GraderError,))
+    rows = [json.loads(x) for x in (tmp_path / "a@1.part.jsonl").read_text().splitlines()]
+    assert {r["id"] for r in rows} == {"a0"}                    # nothing scored for the item the grader failed on

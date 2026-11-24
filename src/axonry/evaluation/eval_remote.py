@@ -28,6 +28,35 @@ from pathlib import Path
 ITEMS_MISMATCH = 3
 
 
+def ifbench_grader(graders: Path, GraderError):
+    """Task "ifbench" (IFBench's checkers, from graders/ in the items pack: evaluation machines only, never the toolkit's):
+    strict, every instruction of the item followed, as IFBench's evaluation_lib grades. Checked here before any
+    answer is generated; a missing checker, package or nltk resource is ours (GraderError), never a wrong answer."""
+    sys.path.insert(0, str(graders))
+    try:
+        import nltk  # noqa: PLC0415
+        from ifbench import instructions_registry as R  # noqa: PLC0415
+        for res in ("tokenizers/punkt_tab/english/", "corpora/stopwords", "taggers/averaged_perceptron_tagger_eng"):
+            nltk.data.find(res)
+    except (ImportError, LookupError) as e:
+        raise GraderError(f"ifbench grader: {type(e).__name__}: {str(e).strip()[:300]}") from e
+
+    def grade(item, answer):
+        resp, ok = answer.strip(), []
+        try:
+            for iid, kw in zip(item["instruction_id_list"], item["kwargs"]):
+                inst = R.INSTRUCTION_DICT[iid](iid)
+                inst.build_description(**{k: v for k, v in kw.items() if v is not None})
+                args = inst.get_instruction_args()
+                if args and "prompt" in args:
+                    inst.build_description(prompt=item["problem"])
+                ok.append(bool(resp) and bool(inst.check_following(resp)))
+        except (ImportError, LookupError, KeyError) as e:     # a resource or an instruction id we do not have
+            raise GraderError(f"ifbench grader: {type(e).__name__}: {str(e).strip()[:300]}") from e
+        return sum(ok) / len(ok), all(ok)
+    return grade
+
+
 def requests_for(benchmarks, load, prompt_of, stable_seed, salt):
     """-> [(key, item, k, prompt, seed)] in benchmark order, then item order, then sample."""
     out = []
@@ -52,9 +81,10 @@ def read_done(part: Path) -> dict:
     return {(str(r["id"]), r["k"]): r for r in rows}
 
 
-def run_stream(reqs, send, grade, out: Path, concurrency: int):
+def run_stream(reqs, send, grade, out: Path, concurrency: int, fatal=()):
     """Keep `concurrency` requests in flight over the whole stream; write each graded row as it lands; finalize every
-    benchmark whose rows are all there. send(prompt, seed) -> (text, finish_reason, n_tokens)."""
+    benchmark whose rows are all there. send(prompt, seed) -> (text, finish_reason, n_tokens). An exception of a type
+    in `fatal` (the grader cannot run here: ours) stops the run instead of scoring the answer."""
     out.mkdir(parents=True, exist_ok=True)
     keys = list(dict.fromkeys(q[0] for q in reqs))
     final = {key for key in keys if (out / f"{key}.jsonl").exists()}       # finished by an earlier run
@@ -70,6 +100,8 @@ def run_stream(reqs, send, grade, out: Path, concurrency: int):
         text, finish, ntok = answer
         try:
             g = grade(r, text, finish)
+        except fatal:
+            raise
         except Exception as e:  # noqa: BLE001 - an answer the grader cannot read is wrong, never a failed run
             g = {"pred": None, "correct": False, "cut": finish == "length", "kind": "grade_error",
                  "grade_error": f"{type(e).__name__}: {e}"[:300]}
@@ -158,9 +190,10 @@ def main(argv=None):
         resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
     from transformers import AutoTokenizer  # noqa: PLC0415
     from wsp import data, profiles  # noqa: PLC0415
-    from wsp.common import stable_seed  # noqa: PLC0415
+    from wsp.common import WORK, stable_seed  # noqa: PLC0415
     from wsp.gen import CONTEXT_MARGIN  # noqa: PLC0415
-    from wsp.grade import score  # noqa: PLC0415
+    from wsp import grade as wsp_grade  # noqa: PLC0415
+    from wsp.grade import GraderError, score  # noqa: PLC0415
 
     benchmarks = json.loads(a.benchmarks)
     for b in benchmarks:
@@ -171,11 +204,21 @@ def main(argv=None):
             return ITEMS_MISMATCH
             print(f"{b['key']}: item set {got[:12]} != frozen {b['manifest'][:12]}", file=sys.stderr)
             return ITEMS_MISMATCH
+    ifb = [r for b in benchmarks for r in data.load(b["task"]) if r.get("task") == "ifbench"]
+    if ifb:
+        try:
+            wsp_grade.GRADERS["ifbench"] = ifbench_grader(WORK / "graders", GraderError)
+            for r in ifb:                # every instruction of every item builds here (an empty answer: wrong)
+                wsp_grade.GRADERS["ifbench"](r, "")
+        except GraderError as e:
+            print(f"{e}", file=sys.stderr)
+            return ITEMS_MISMATCH
     prof = profiles.get(a.profile)
     tok = AutoTokenizer.from_pretrained(a.model)
 
-    def prompt_of(r):
-        return tok.apply_chat_template([{"role": "user", "content": data.user_message(r)}], tokenize=False,
+    def prompt_of(r):        # an IFBench prompt is shown as IFEval's is: the problem itself
+        msg = data.user_message({**r, "task": "ifeval"} if r.get("task") == "ifbench" else r)
+        return tok.apply_chat_template([{"role": "user", "content": msg}], tokenize=False,
                                        add_generation_prompt=True, enable_thinking=prof["thinking"])
 
     reqs = requests_for(benchmarks, data.load, prompt_of, stable_seed, a.salt)
@@ -183,7 +226,11 @@ def main(argv=None):
     server = start_server(a.model, a.gpus, sampling["max_tokens"] + CONTEXT_MARGIN, a.port)
     try:
         run_stream(reqs, http_sender(a.port, str(a.model), sampling),
-                   lambda r, text, finish: score(r, text, finish, prof["thinking"]), a.out, a.concurrency)
+                   lambda r, text, finish: score(r, text, finish, prof["thinking"]), a.out, a.concurrency,
+                   fatal=(GraderError,))
+    except GraderError as e:     # the grader cannot run here: ours, never the model's
+        print(f"{e}", file=sys.stderr)
+        return ITEMS_MISMATCH
     finally:
         server.terminate()
         server.wait(timeout=120)
