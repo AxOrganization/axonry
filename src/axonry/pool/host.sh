@@ -94,11 +94,14 @@ if china:
 json.dump(c, open(p, "w"), indent=2)
 PY
   nvidia-ctk runtime configure --runtime=docker >/dev/null
-  systemctl enable docker >/dev/null 2>&1
+  # no systemd reload or docker restart unless something changed: on a host with cgroup v2 and the systemd driver,
+  # a reload takes the GPUs from running containers started without --device (see run)
+  systemctl is-enabled -q docker || systemctl enable docker >/dev/null 2>&1
   if [ "$(cat $cfg)" != "$old" ] || ! systemctl is-active -q docker; then systemctl restart docker; fi
 
   # containers never open connections to this host (its sshd, its LAN services)
-  cat > /etc/systemd/system/axonry-firewall.service <<'EOF'
+  local unit=/etc/systemd/system/axonry-firewall.service
+  cat > $unit.new <<'EOF'
 [Unit]
 Description=axonry: containers open no connections to this host
 After=docker.service
@@ -109,7 +112,9 @@ ExecStart=/bin/sh -c 'iptables -C INPUT -i docker0 -m conntrack --ctstate NEW -j
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload && systemctl enable axonry-firewall >/dev/null 2>&1 && systemctl restart axonry-firewall
+  if cmp -s $unit.new $unit; then rm $unit.new; else mv $unit.new $unit && systemctl daemon-reload; fi
+  systemctl is-enabled -q axonry-firewall || systemctl enable axonry-firewall >/dev/null 2>&1
+  systemctl start axonry-firewall
 
   # the jump user: forwarding to one container port per key (authorized_keys), nothing else
   id $JUMP >/dev/null 2>&1 || useradd -m -s "$(command -v nologin)" $JUMP
@@ -176,8 +181,15 @@ run() {
   total=$(nvidia-smi -L | wc -l); ngpu=$(echo "$gpus" | tr ',' '\n' | wc -l)
   cpus=$(( $(nproc) * ngpu / total ))
   mem=$(( $(awk '/^MemTotal/{print $2}' /proc/meminfo) * 9 / 10 * ngpu / total / 1024 ))
+  # its GPUs' device nodes (by minor number) and the driver's, also as --device: they enter the container's own
+  # device rules, so a systemd reload on the host (cgroup v2, systemd driver) does not take them away
+  local devs=() i d
+  for i in ${gpus//,/ }; do
+    devs+=(--device "/dev/nvidia$(nvidia-smi -q -i "$i" | awk -F: '/Minor Number/ {gsub(/ /, "", $2); print $2}')")
+  done
+  for d in /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools /dev/nvidia-modeset; do [ -c $d ] && devs+=(--device $d); done
   docker rm -f "axonry-run$n" >/dev/null 2>&1 || true
-  docker run -d --name "axonry-run$n" --label axonry.row="$row" --gpus "\"device=$gpus\"" --shm-size 32g \
+  docker run -d --name "axonry-run$n" --label axonry.row="$row" --gpus "\"device=$gpus\"" "${devs[@]}" --shm-size 32g \
     --cpus "$cpus" --memory "${mem}m" --ulimit nofile=1048576:1048576 -p "127.0.0.1:$((2300 + n)):22" \
     -v $R/models:$R/models -v $H/init:/srv/axonry-init:ro --entrypoint /srv/axonry-init/container_init.sh "$tag" \
     >/dev/null
