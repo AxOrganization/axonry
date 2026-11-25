@@ -159,7 +159,8 @@ def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> s
     # 3. recent matches
     decided = sorted((r for r in (line or {}).get("entries", []) if r.get("scores")),
                      key=lambda r: r.get("decided_at") or 0, reverse=True)[:n]
-    benches = list(dict.fromkeys([*benchmarks, *(k for r in decided for k in r["scores"])]))
+    # the rules in force only: a match judged under an earlier version shows what it shares with them ("-" else)
+    benches = list(benchmarks) or list(dict.fromkeys(k for r in decided for k in r["scores"]))
     rows = []
     champ_line = (line or {}).get("champion") or {}
     for r in decided:
