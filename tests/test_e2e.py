@@ -848,6 +848,10 @@ def test_a_benchmark_added_later_is_generated_for_the_champion_it_meets(tmp_path
     assert set(line["champion"]["accuracy"]) == set(after)                    # the added one shown for it too
     text = board(json.loads(pub.get(layout.STATUS)), line, color=False, benchmarks=orch.rules_for(sd).benchmark_keys())
     assert "champion's accuracy:" in text and " extra " in text.split("champion's accuracy:")[1].split("\n")[0]
+    kept = [k for k in orch.rules_for(sd).benchmark_keys() if k != "extra@1"]        # rules that dropped one
+    text = board(json.loads(pub.get(layout.STATUS)), line, color=False, benchmarks=kept)
+    shown = text.split("champion's accuracy:")[1].split("\n")[0]
+    assert " extra " not in shown and all(f" {k.split('@')[0]} " in shown + " " for k in kept)
 
 
 def test_a_new_champion_without_an_entrys_benchmarks_is_evaluated_before_the_match(tmp_path):
