@@ -175,7 +175,7 @@ class Orchestrator:
         cursor = self.db.get("cursor")
         if cursor is None:       # deposits and commitments before the first rules took effect are never read
             first = registry.all_rules(self.d.registry_root)[0]
-            if first["effective_block"] <= 0:
+            if (first.doc.get("effective_block") or 0) <= 0:
                 raise ValueError("the first rules have no effective_block yet (the block they take effect at)")
             cursor = first["effective_block"] - 1
             self.db.set("cursor", cursor)
@@ -365,11 +365,12 @@ class Orchestrator:
             self._reject(sid, binding.REVEAL_EXPIRED, f"PR #{pr.number} was opened at {_utc(pr.opened_at)}, after "
                          f"the reveal deadline {_utc(by)} ({float(hours):g} h after the commitment)")
             return pr.number
-        lines = registry.lines_at(s["prio_block"], self.d.registry_root)      # the lines open at the commitment
-        entry = binding.check_content(self.d.github.dir_blobs(pr.head, pr.directory), [r["base"] for r in lines],
-                                      self.d.comp_rules)
+        # the lines it may enter: those in force at its commitment (a version deployed since is in force at any block:
+        # a line launched is open to every entry not locked yet)
+        lines = {r["base"]: r for r in registry.lines_at(s["prio_block"], self.d.registry_root)}
+        entry = binding.check_content(self.d.github.dir_blobs(pr.head, pr.directory), list(lines), self.d.comp_rules)
         if not isinstance(entry, binding.Rejected) and entry["base"] != s["base"]:   # it enters the line it names
-            rules = next(r for r in lines if r["base"] == entry["base"])
+            rules = lines[entry["base"]]
             self.db.update(sid, base=entry["base"], record_patch={"rules_sha256": rules.sha256})
             self._publish_line(s["base"])
             s = self.db.sub(sid)

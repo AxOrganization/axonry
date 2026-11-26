@@ -1176,10 +1176,11 @@ def test_started_before_the_first_rules_it_waits(tmp_path):
     assert pub.get(layout.WEIGHTS) is None and orch.db.get("cursor") == 499
 
 
-def test_a_second_base_model_runs_its_own_line_beside_the_first(tmp_path):
-    """A second base model's line taking effect beside the first: from its block both lines are in force with their
-    shares of the weight (the new one has no champion yet: its share is burned), the first line's champion keeps its
-    share, and index.json lists both. An entry enters the line its entry.json names."""
+def test_a_second_base_model_runs_its_own_line_beside_the_first_from_its_deploy(tmp_path):
+    """Versions without an effective_block are in force as soon as they are deployed: from the restart both lines are
+    in force with their shares of the weight (the new one has no champion yet: its share is burned), the first line's
+    champion keeps its share, and index.json lists both. An entry enters the line its entry.json names, even one
+    committed before the deploy."""
     from axonry.common.canon import write_json
     orch, chain, clock, pub = make(tmp_path)
     orch.bootstrap()
@@ -1189,21 +1190,20 @@ def test_a_second_base_model_runs_its_own_line_beside_the_first(tmp_path):
     run_until_quiet(orch, clock)
     sid_a = orch.db.champion(BASE)["sid"]
     uid_a = chain.uid_of(orch.db.champion(BASE)["hotkey"], RULES["netuid"])
+    commit(chain, "E", blobs_for("E", base="other-base"), 105)          # before the deploy
+    deposit(chain, "E", 105)
+    chain.head = 105
+    orch.intake()
     root = Path(orch.d.registry_root)
     other = {**json.loads((root / "bases" / f"{BASE}.json").read_text()), "id": "other-base"}
     write_json(root / "bases" / "other-base.json", other)
     rules = json.loads(sorted((root / "rules" / BASE).glob("*.json"))[-1].read_text())
-    write_json(root / "rules" / BASE / "v99.json", {**rules, "effective_block": 130, "share": 0.6})
+    rules.pop("effective_block")
+    write_json(root / "rules" / BASE / "v99.json", {**rules, "share": 0.6})
     (root / "rules" / "other-base").mkdir()
-    write_json(root / "rules" / "other-base" / "v1.json", {**rules, "base": "other-base", "effective_block": 130,
-                                                             "share": 0.4})
+    write_json(root / "rules" / "other-base" / "v1.json", {**rules, "base": "other-base", "share": 0.4})
     assert registry.validate(root) == []
-    orch.bootstrap()                                    # a new rules version comes with a deploy (a restart)
-    orch.refresh_weights()
-    assert json.loads(pub.get(layout.WEIGHTS))["weights"] == [{"hotkey": orch.db.champion(BASE)["hotkey"],
-                                                               "uid": uid_a, "weight": 1.0}]   # staged, not in force yet
-    chain.head = 131
-    orch.intake()
+    orch.bootstrap()                                    # the deploy (a restart): in force at once
     orch.refresh_weights()
     w = json.loads(pub.get(layout.WEIGHTS))
     assert w["base"] == BASE and [(x["base"], x["share"]) for x in w["lines"]] == [(BASE, 0.6), ("other-base", 0.4)]
@@ -1215,9 +1215,8 @@ def test_a_second_base_model_runs_its_own_line_beside_the_first(tmp_path):
     assert all(pub.get(v["rules"]) for v in idx["versions"])
     assert next(r for r in json.loads(pub.get(layout.line(BASE)))["entries"] if r["sid"] == sid_a)["decision"] \
         == "NEW_CHAMPION"
-    # an entry naming the second base enters its line, under that line's rules, and becomes its first champion
-    pay(orch, chain, "E", 132, 2, base="other-base")
-    chain.head = 132
+    # its PR opened now: it enters the second line, under that line's rules, and becomes its first champion
+    orch.d.github.add_pr(len(orch.d.github.prs) + 1, HOTKEYS["E"], "e1", blobs_for("E", base="other-base"))
     run_until_quiet(orch, clock)
     e = next(s for s in orch.db.subs() if s["base"] == "other-base")
     assert orch.rules_for(e["sid"])["base"] == "other-base"

@@ -57,9 +57,9 @@ reference's public per-question results (`k` samples per item): a re-evaluation 
 
 Edits may build on any earlier published edit, so improvements can stack. Each base model has its own **line** of
 champions, and several lines can run side by side: the rules give each line its share of the subnet's weight, which
-goes to that line's champion (burned while it has none). An entry enters the line of the base model its `entry.json`
-names, among the lines in force at its commitment, and is matched only within that line. A line that ends stays
-published.
+goes to that line's champion (burned while it has none). A new line, or a new version of a line, is in force as soon
+as it is published. An entry enters the line of the base model its `entry.json` names, among the lines in force, and is
+matched only within that line. A line that ends stays published.
 
 ## Taking part as a miner
 

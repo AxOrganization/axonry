@@ -135,6 +135,6 @@ def publish_index(store, lines, root=registry.ROOT):
     (axonry_validator.network), not repeated here."""
     _json(store, layout.INDEX, {"schema": SCHEMAS["index"], "base": lines[0]["base"],
                                 "rules": layout.rules_version(lines[0].sha256), "lines": index_lines(lines),
-                                "versions": [{"base": r["base"], "effective_block": r["effective_block"],
+                                "versions": [{"base": r["base"], "effective_block": r.doc.get("effective_block"),
                                               "rules": layout.rules_version(r.sha256)}
                                              for r in registry.all_rules(root)]})

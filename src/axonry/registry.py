@@ -4,14 +4,16 @@ Source files live in the repo under registry/ and are published unchanged to the
   registry/bases/<base_id>.json                -> bases/<base_id>.json
   registry/benchmarks/<id>@<version>.json      -> benchmarks/<id>@<version>.json
   registry/rules/<base_id>/<name>.json         -> rules/<sha256>.json
-Each base model has its own line: its rules versions, whose champion carries on across them. A version takes effect at
-`effective_block` (the latest one of a line at or before a block is in force) and gives its line a `share` of the
-subnet's weight (1 when absent); the lines in force at a block are those whose version in force has a share, and their
-shares sum to 1, so several lines can run side by side and a line ends with a version of share 0. They share the
+Each base model has its own line: its rules versions (v1, v2, ...), whose champion carries on across them. A version
+takes effect at its `effective_block`, or, without one, as soon as it is deployed (in force at any block the deployed
+code is asked about); the latest version of a line in force is the line's. A version gives its line a `share` of the
+subnet's weight (1 when absent); the lines in force are those whose version has a share, and their shares sum to 1, so
+several lines can run side by side and a line ends with a version of share 0. They share the
 subnet's own terms (netuid, treasury, accepted assets, competition repo pin). An entry names its base (entry.json) and
 keeps the version of that line in force at its commitment. Nothing else in the code names a concrete base or
 benchmark.
 """
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2] / "registry"
 
 BASE_FIELDS = {"schema", "id", "hf_repo", "revision", "files"}
 BENCH_FIELDS = {"schema", "id", "version", "adapter", "task", "samples_per_item", "items_manifest_sha256", "judge"}
-RULES_FIELDS = {"schema", "effective_block", "netuid", "base", "benchmarks", "judge", "fee", "run",
+RULES_FIELDS = {"schema", "netuid", "base", "benchmarks", "judge", "fee", "run",
                 "competition", "review"}
 
 
@@ -50,6 +52,7 @@ class Benchmark:
 class Rules:
     doc: dict
     root: Path = field(default=ROOT, compare=False)    # the registry it was read from (its benchmarks)
+    name: str = field(default="", compare=False)       # its file's name in the line (v1, v2, ...)
 
     @property
     def sha256(self):
@@ -109,6 +112,18 @@ def latest_rules(root=ROOT) -> "Rules":
     return all_rules(root)[-1]
 
 
+def block(rules) -> float:
+    """The block a version takes effect at: its effective_block, or -inf for one in force as deployed."""
+    b = rules.doc.get("effective_block")
+    return float("-inf") if b is None else b
+
+
+def _order(rules):
+    """Versions in the order they take effect: by block, then (deployed ones, or a shared block) by version number."""
+    b = rules.doc.get("effective_block")
+    return (float("inf") if b is None else b, int(re.sub(r"\D", "", rules.name) or 0))
+
+
 def load_rules_versions(base, root=ROOT):
     """The rules versions of one base's line, oldest first."""
     d = Path(root) / "rules" / base
@@ -118,48 +133,44 @@ def load_rules_versions(base, root=ROOT):
         _need(doc, RULES_FIELDS, f"rules {p}")
         if doc["base"] != base:
             raise RegistryError(f"{p} declares base {doc['base']}")
-        out.append(Rules(doc, Path(root)))
+        out.append(Rules(doc, Path(root), p.stem))
     if not out:
         raise RegistryError(f"no rules for base {base}")
-    return sorted(out, key=lambda r: r["effective_block"])
+    out = sorted(out, key=_order)
+    if len({_order(r) for r in out}) != len(out):
+        raise RegistryError(f"two rules versions of {base} take effect together")
+    return out
 
 
 def all_rules(root=ROOT):
-    """Every rules version of every base, in the order they take effect (no two of one line share a block; lines
-    starting together are in base order)."""
-    out = []
-    for p in sorted((Path(root) / "rules").iterdir()):
-        if p.is_dir():
-            line = load_rules_versions(p.name, root)
-            if len({r["effective_block"] for r in line}) != len(line):
-                raise RegistryError(f"two rules versions of {p.name} share an effective_block")
-            out += line
-    return sorted(out, key=lambda r: r["effective_block"])      # stable: base order within a block
+    """Every rules version of every base, in the order they take effect (lines starting together in base order)."""
+    out = [r for p in sorted((Path(root) / "rules").iterdir()) if p.is_dir() for r in load_rules_versions(p.name, root)]
+    return sorted(out, key=lambda r: _order(r)[0])         # stable: each line's own order within a block
 
 
-def lines_at(block, root=ROOT) -> list:
-    """The lines in force at `block`: the version in force of every line that has a share, the line that started
-    first first (the primary one: index.json and weights.json name it at top level)."""
+def lines_at(at, root=ROOT) -> list:
+    """The lines in force at block `at`: the latest version in force of every line that has a share, the line that
+    started first first (the primary one: index.json and weights.json name it at top level)."""
     cur = {}
     for r in all_rules(root):
-        if r["effective_block"] <= block:
+        if block(r) <= at:
             cur.setdefault(r["base"], []).append(r)
-    lines = [v[-1] for v in sorted(cur.values(), key=lambda v: v[0]["effective_block"]) if share(v[-1]) > 0]
+    lines = [v[-1] for v in sorted(cur.values(), key=lambda v: _order(v[0])) if share(v[-1]) > 0]
     if not lines:
-        raise RegistryError(f"no rules in force at block {block}")
+        raise RegistryError(f"no rules in force at block {at}")
     return lines
 
 
-def rules_at(block, root=ROOT, base=None):
-    """The rules version in force at `block`: of `base`'s line, else of the primary line in force."""
+def rules_at(at, root=ROOT, base=None):
+    """The rules version in force at block `at`: of `base`'s line, else of the primary line in force."""
     if base is None:
-        return lines_at(block, root)[0]
+        return lines_at(at, root)[0]
     best = None
     for r in load_rules_versions(base, root):
-        if r["effective_block"] <= block:
+        if block(r) <= at:
             best = r
     if best is None:
-        raise RegistryError(f"no rules of {base} in force at block {block}")
+        raise RegistryError(f"no rules of {base} in force at block {at}")
     return best
 
 
@@ -171,7 +182,7 @@ def validate(root=ROOT):
         return [str(e)]
     errs = []
     for r in versions:
-        at = f"{r['base']}@{r['effective_block']}"
+        at = f"{r['base']}/{r.name}"
         try:
             load_base(r["base"], root)
         except RegistryError as e:
@@ -205,15 +216,16 @@ def validate(root=ROOT):
             errs.append(f"{at}: n_win {j['n_win']} out of range")
         if not 0 <= share(r) <= 1:
             errs.append(f"{at}: share {share(r)} out of [0, 1]")
-    for block in sorted({r["effective_block"] for r in versions}):    # the lines in force from each block on
+    for at in sorted({_order(r)[0] for r in versions}):       # the lines in force from each block on (inf: deployed)
         try:
-            lines = lines_at(block, root)
+            lines = lines_at(at, root)
         except RegistryError as e:
             errs.append(str(e))
             continue
+        when = "as deployed" if at == float("inf") else f"block {at}"
         if abs(sum(share(r) for r in lines) - 1) > 1e-9:
-            errs.append(f"block {block}: the shares of the lines in force sum to {sum(share(r) for r in lines):g}, not 1")
+            errs.append(f"{when}: the shares of the lines in force sum to {sum(share(r) for r in lines):g}, not 1")
         terms = {canonical([r["netuid"], r["fee"]["treasury"], r["fee"]["assets"], r["competition"]]) for r in lines}
         if len(terms) > 1:
-            errs.append(f"block {block}: the lines in force differ in netuid, treasury, assets or competition pin")
+            errs.append(f"{when}: the lines in force differ in netuid, treasury, assets or competition pin")
     return errs

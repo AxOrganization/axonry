@@ -18,9 +18,7 @@
                                                      write registry/bases/<id>.json from the competition repo's profile
                                                      (hf repo + revision) and the sha256 of every file in DIR
   axonry-orchestrator registry pin-bench KEY            items_manifest_sha256 of the items built now (benchmarks/sources.py)
-  axonry-orchestrator registry pin-competition          competition commit + rules.json sha256 into the latest rules
-  axonry-orchestrator registry activate [--block N]     the latest rules versions take effect at N (default: the
-                                                     finalized head now: in force as soon as they are deployed)
+  axonry-orchestrator registry pin-competition          competition commit + rules.json sha256 into the versions to deploy
   axonry-orchestrator publish-registry                  publish definitions to the public bucket
   axonry-orchestrator publish-items                     build the rules' benchmark items (checked against their frozen
                                                      manifests) and publish them beside their definitions
@@ -299,32 +297,20 @@ def pin_bench(key, comp_repo, root=registry.ROOT):
 
 
 def pin_competition(comp_repo, root=registry.ROOT):
-    """Record the competition repo commit and rules.json sha256 in the latest rules version, of every line staged at
-    its block (edit them only before they take effect; afterwards add new versions instead)."""
+    """Record the competition repo commit and rules.json sha256 in the latest version of every line still to be
+    deployed: no effective_block and not committed yet (a version in force is never edited: add a new one)."""
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=comp_repo, capture_output=True, text=True,
                             check=True).stdout.strip()
     rules_sha = sha256_hex(Path(comp_repo, "rules.json").read_bytes())
-    block = registry.latest_rules(root)["effective_block"]
-    paths = [p for p in sorted((Path(root) / "rules").glob("*/*.json")) if read_json(p)["effective_block"] == block]
+    lines = {r["base"]: r for r in registry.all_rules(root)}          # the latest of each line
+    paths = [Path(root) / "rules" / b / f"{r.name}.json" for b, r in lines.items() if r.doc.get("effective_block") is None]
+    paths = [p for p in paths if subprocess.run(["git", "ls-files", "--error-unmatch", p.name], cwd=p.parent,
+                                                 capture_output=True).returncode != 0]
     for path in paths:
         doc = read_json(path)
         doc["competition"] = {**doc["competition"], "commit": commit, "rules_sha256": rules_sha}
         write_json(path, doc)
     return paths, commit, rules_sha
-
-
-def activate(block, root=registry.ROOT):
-    """The rules versions staged together (every line's version at the latest effective_block) take effect at `block`
-    instead: launched as soon as they are deployed. Only for versions not in force yet; `block` must come after every
-    version already in force."""
-    latest = registry.latest_rules(root)["effective_block"]
-    paths = [p for p in sorted((Path(root) / "rules").glob("*/*.json")) if read_json(p)["effective_block"] == latest]
-    before = [r["effective_block"] for r in registry.all_rules(root) if r["effective_block"] != latest]
-    if before and block <= max(before):
-        raise SystemExit(f"block {block} is not after the versions already in force (up to {max(before)})")
-    for path in paths:
-        write_json(path, {**read_json(path), "effective_block": int(block)})
-    return paths
 
 
 def main(argv=None):
@@ -359,7 +345,6 @@ def main(argv=None):
     pb.add_argument("--model-dir", required=True)
     reg.add_parser("pin-bench").add_argument("key")
     reg.add_parser("pin-competition")
-    reg.add_parser("activate").add_argument("--block", type=int)
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if a.cmd == "registry" and a.reg == "validate":
@@ -397,13 +382,6 @@ def main(argv=None):
         print(json.dumps(pin_base(a.base_id, a.model_dir, cfg.path_of("competition.local_path")), indent=1)[:2000])
     elif a.reg == "pin-bench":
         print(pin_bench(a.key, cfg.path_of("competition.local_path"))["items_manifest_sha256"])
-    elif a.reg == "activate":
-        from ..chain.subtensor import Chain  # noqa: PLC0415
-        block = a.block if a.block is not None else Chain(cfg.get("chain.network", "finney")).finalized_head()
-        print(block, [str(p) for p in activate(block)])
-        errs = registry.validate()
-        if errs:
-            raise SystemExit("\n".join(errs))
     elif a.reg == "pin-competition":
         print(pin_competition(cfg.path_of("competition.local_path")))
     return 0
