@@ -9,6 +9,8 @@
   axonry-orchestrator refresh-agents                    keep the agent backend's sign-ins valid while nothing runs
                                                      (a timer, every 10 min; `run --role main` does it every tick)
   axonry-orchestrator disqualify SID --reason TEXT      public owner ruling: an evaluated submission broke the rules
+  axonry-orchestrator rereview SID --reason TEXT        the owner withdraws an approval: a queued or running entry is
+                                                     reviewed again (a run under way is stopped and charged)
   axonry-orchestrator calibrate [--limit N --samples K]  A/A noise per benchmark on the evaluation machine
   axonry-orchestrator restore-state [--key K]           replace the local state DB by a snapshot from the private bucket
   axonry-orchestrator registry validate                 cross-check bases / benchmarks / rules versions
@@ -323,6 +325,9 @@ def main(argv=None):
     dq = sub.add_parser("disqualify", help="public owner ruling: an evaluated submission broke the rules")
     dq.add_argument("sid")
     dq.add_argument("--reason", required=True)
+    rr = sub.add_parser("rereview", help="the owner withdraws an approval: the entry is reviewed again")
+    rr.add_argument("sid")
+    rr.add_argument("--reason", required=True)
     reg = sub.add_parser("registry").add_subparsers(dest="reg", required=True)
     reg.add_parser("validate")
     pb = reg.add_parser("pin-base")
@@ -351,6 +356,8 @@ def main(argv=None):
         cmd_calibrate(cfg, a)
     elif a.cmd == "disqualify":
         build(cfg).disqualify(a.sid, a.reason)
+    elif a.cmd == "rereview":
+        build(cfg).rereview(a.sid, a.reason)
     elif a.cmd == "publish-registry":
         from ..publish.publisher import publish_registry  # noqa: PLC0415
         publish_registry(public_store(cfg))

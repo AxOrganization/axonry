@@ -18,7 +18,7 @@ from axonry.common.canon import sha256_hex
 from axonry.intake.github import PRCandidate
 from axonry.miner import cli as miner
 from axonry.orchestrator.db import DB
-from axonry.orchestrator.service import Deps, Orchestrator
+from axonry.orchestrator.service import REVIEW_FEE, Deps, Orchestrator
 from axonry.pool.machine import Machine
 from axonry_validator import main as validator
 
@@ -140,6 +140,10 @@ class FakeGitHub:
 
     def comment(self, number, text):
         self.comments.append((number, text))
+
+    def dismiss_approvals(self, number, message):
+        self.dismissed = getattr(self, "dismissed", []) + [number]
+        self.approve_all = False
 
     def close(self, number):
         self.prs[number]["state"] = "closed"
@@ -1030,6 +1034,37 @@ def test_a_vanished_machine_runs_again_at_no_cost(tmp_path):
     assert orch.db.accounts()[COLDKEYS["A"]]["held_usd"] == RUN_USD
     run_until_quiet(orch, clock)                        # the run that was lost once still takes the title
     assert orch.db.champion(BASE)["sid"] == sa and 1 in orch.d.github.merged
+
+
+def test_the_owner_sends_a_running_entry_back_to_review_and_its_run_is_charged(tmp_path):
+    """rereview: the run under way is stopped and charged as any run (kept on the account, set aside from the entry's
+    own charges), its machine released, its approval dismissed; reviewed again, it runs anew from the start."""
+    orch, chain, clock, pub = make(tmp_path)
+    v = blobs_for("A")
+    commit(chain, "A", v, 101)
+    deposit(chain, "A", 101, 3 * FEE)
+    orch.d.github.add_pr(1, HOTKEYS["A"], "a1", v)
+    chain.head = 101
+    open_rules(orch, 101)
+    sa = "0000000101-0001"
+    orch.schedule()
+    clock.t += int(1.5 * 3600)
+    orch.supervise()
+    assert orch.db.sub(sa)["status"] == "RUNNING" and orch.db.charged(sa)[1] == HOUR
+    before = orch.db.accounts()[COLDKEYS["A"]]["charged_usd"]
+    orch.rereview(sa, "the review missed that its generator is another entry's")
+    s = orch.db.sub(sa)
+    assert s["status"] == "REVIEW" and s["locked_commit"] is None and orch.d.fleet.released == [sa]
+    assert orch.d.github.dismissed == [1] and "back to review" in orch.d.github.comments[-1][1]
+    assert set(orch.db.charged(sa)) <= {REVIEW_FEE}                      # its next run is charged anew
+    stopped = s["record"]["stopped_runs"][0]["charged_usd"]
+    assert stopped >= HOUR / 1e6 and orch.db.accounts()[COLDKEYS["A"]]["charged_usd"] >= before   # kept on the account
+    orch.intake()
+    assert orch.db.sub(sa)["status"] == "REVIEW"                         # waits for the new review
+    orch.d.github.approve_all = True
+    run_until_quiet(orch, clock)
+    assert orch.db.champion(BASE)["sid"] == sa and orch.d.runner.kicked.count(sa) == 2
+    assert orch.db.accounts()[COLDKEYS["A"]]["charged_usd"] > sum(orch.db.charged(sa).values()) / 1e6
 
 
 def test_a_failed_start_keeps_the_machine(tmp_path):

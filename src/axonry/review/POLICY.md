@@ -11,6 +11,8 @@ Your workspace:
   in progress (its PR open; `earlier/INDEX.md` lists them in order: earliest first, with status and each one's idea
   as summarized when it was reviewed). Finished entries and the miner's own are not there: building on them is free.
   It may be empty.
+- `parent/` - the published submissions it builds on (its `entry.json` `parent`, that one's parent, and so on;
+  nearest first), finished or not. It may be empty.
 - `original/` - only when the submission is a reduction: after a review asked for changes, a miner may only delete
   (files, words or punctuation) and have the rest reviewed again; `original/` is the content as first revealed. A
   reduction is reviewed in full, as any submission: every check applies to it as it stands, and `original/` only adds
@@ -45,8 +47,11 @@ Answer three questions. Each fails only for a concrete reason you can point to (
    which may be close; read in full each one that may be, and each one without a summary: the directories, not the
    summaries, decide. Renaming, rewording, reordering, changing
    constants or adding filler around someone else's method is not a difference. Building openly on a published
-   submission through `entry.json` `parent` is allowed (the new layer itself must be original). When it fails,
-   name the earlier directory it copies.
+   submission through `entry.json` `parent` is allowed, but the new layer itself must be original: compare it with
+   every submission in `parent/` too, which must not be run again with other constants. Code or text taken from a
+   submission in `parent/` or `earlier/` must be credited to it; presenting it as the author's own ("ours", "a
+   program of ours", its own contribution) is an attempt to deceive a reviewer and fails, whatever else is new.
+   When it fails, name the directory it copies.
 
 Do not judge whether the method will work or how good it is: the benchmarks decide that.
 

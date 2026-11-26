@@ -112,6 +112,13 @@ class GitHub:
             return None, None
         return ("approved" if latest["state"] == "APPROVED" else "changes"), latest.get("body")
 
+    def dismiss_approvals(self, number: int, message: str):
+        """Every standing approval of the PR dismissed (the owner withdrew it): its content is reviewed again."""
+        for r in self.reviews(number):
+            if r.get("state") == "APPROVED":
+                self._get(f"/repos/{self.repo}/pulls/{number}/reviews/{r['id']}/dismissals", method="PUT",
+                          body={"message": message[:1000], "event": "DISMISS"})
+
     def post_review(self, number: int, commit: str, event: str, body: str):
         """event: APPROVE | REQUEST_CHANGES. Bound to `commit` (GitHub's commit_id)."""
         return self._get(f"/repos/{self.repo}/pulls/{number}/reviews", method="POST",

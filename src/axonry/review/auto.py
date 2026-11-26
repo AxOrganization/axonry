@@ -62,9 +62,29 @@ def _content_dir(gh, c, work: Path) -> Path:
     return cache
 
 
-def prepare(gh, item, contents, rules, work: Path, ideas=None) -> Path:
-    """workspace/ submission/ (the item at its listed commit) + earlier/ (+ INDEX.md with each one's idea) + original/
-    (a reduced item: the content as first revealed, to check the deletions against); -> its path."""
+def parent_chain(reader, blobs, champion=None, limit=50) -> list:
+    """The published entries a submission builds on: its entry.json parent ("champion": the champion now), that one's
+    parent, and so on -> [(sid, commit, directory, PR number)], nearest first, as their published records name them."""
+    try:
+        sid = json.loads(blobs.get("entry.json") or b"{}").get("parent")
+    except ValueError:
+        return []
+    sid = champion if sid == "champion" else sid
+    out = []
+    while sid and isinstance(sid, str) and len(out) < limit and sid not in {c[0] for c in out}:
+        rec = reader.get(layout.submission(sid, "submission.json")) or {}
+        pr = rec.get("pr") or {}
+        if not (pr.get("locked_commit") and pr.get("directory")):
+            break
+        out.append((sid, pr["locked_commit"], pr["directory"], pr.get("number")))
+        sid = rec.get("parent")
+    return out
+
+
+def prepare(gh, item, contents, rules, work: Path, ideas=None, reader=None, champion=None) -> Path:
+    """workspace/ submission/ (the item at its listed commit) + earlier/ (+ INDEX.md with each one's idea) + parent/
+    (the published entries it builds on, finished or not) + original/ (a reduced item: the content as first revealed,
+    to check the deletions against); -> its path."""
     ideas = ideas or {}
     ws = (work / f"pr{item['pr']}-{item['commit'][:12]}").resolve()   # absolute: the model runs inside it
     blobs = gh.dir_blobs(item["commit"], item["directory"])
@@ -84,6 +104,11 @@ def prepare(gh, item, contents, rules, work: Path, ideas=None) -> Path:
                      + (ideas.get(key(c)) or "(no summary: read it in full)"))
     (ws / "earlier").mkdir(parents=True, exist_ok=True)
     (ws / "earlier" / "INDEX.md").write_text("\n".join(index) + "\n")
+    if reader is not None:
+        for i, (sid, commit, directory, pr) in enumerate(parent_chain(reader, blobs, champion)):
+            dst = ws / "parent" / f"{i + 1}-{sid}-pr{pr}"
+            if not dst.exists():
+                shutil.copytree(_content_dir(gh, {"commit": commit, "directory": directory}, work), dst)
     benches = ", ".join(registry.load_benchmark(k).doc["id"] for k in rules.benchmark_keys())
     (ws / "PROMPT.md").write_text(POLICY.read_text() + f"\nThe evaluation benchmarks: {benches}.\n\n"
                                   "Answer with the JSON object the output schema describes. Set `read` to true when you "
@@ -206,7 +231,8 @@ def run(reader, gh, rules, work: Path, command=DEFAULT_COMMAND, interval=60, onc
                 continue                  # already reviewed; status.json just has not caught up
             reviewed = True
             try:
-                ws = prepare(gh, item, st.get("contents", []), rules, work, ideas)
+                ws = prepare(gh, item, st.get("contents", []), rules, work, ideas, reader,
+                             (st.get("champion") or {}).get("sid"))
                 v = ask_model(ws, command)
                 event, body = review_body(v, item)
                 gh.post_review(item["pr"], item["commit"], event, body)

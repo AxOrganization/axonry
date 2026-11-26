@@ -170,3 +170,27 @@ def test_an_idle_reviewer_summarizes_a_content_without_an_idea(tmp_path):
     assert json.loads((tmp_path / "b" / "attempts.json").read_text())["idea:" + auto.key(CONTENTS[0])] == \
         auto.MAX_ATTEMPTS
 
+
+
+def test_the_published_entries_it_builds_on_are_in_the_workspace_finished_or_not(tmp_path):
+    """parent/: the declared parent and its own parents, as their published records name them, even when finished
+    (and so not in earlier/): the new layer is compared with them."""
+    gh = GH()
+    gh.trees["c5"] = {"entry.json": b'{"base": "x", "parent": "0000000050-0001"}', "METHOD.md": b"on 50"}
+    gh.trees["c4"] = {"METHOD.md": b"the parent's own parent"}
+    mine = {"entry.json": b'{"base": "x", "parent": "0000000090-0001"}', "METHOD.md": b"my method"}
+    gh.trees["c2"] = mine
+    records = {"submissions/0000000090-0001/submission.json": {"pr": {"locked_commit": "c5", "directory": "d/",
+                                                                      "number": 5}, "parent": "0000000050-0001"},
+               "submissions/0000000050-0001/submission.json": {"pr": {"locked_commit": "c4", "directory": "d/",
+                                                                      "number": 4}, "parent": None}}
+
+    class R:
+        def get(self, key):
+            return records.get(key)
+    item = {**ITEM, "content_digest": content_digest_of_blobs(mine)}
+    ws = auto.prepare(gh, item, CONTENTS, rules(), tmp_path, reader=R())
+    assert (ws / "parent" / "1-0000000090-0001-pr5" / "METHOD.md").read_bytes() == b"on 50"
+    assert (ws / "parent" / "2-0000000050-0001-pr4" / "METHOD.md").read_bytes() == b"the parent's own parent"
+    assert "`parent/`" in (ws / "PROMPT.md").read_text()
+    assert not (auto.prepare(GH(), ITEM, CONTENTS, rules(), tmp_path / "b", reader=R()) / "parent").exists()

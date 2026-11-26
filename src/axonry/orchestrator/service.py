@@ -1145,6 +1145,40 @@ class Orchestrator:
                            "win" if b["vs_champion"]["win"] else "tie" if b["vs_champion"]["tie_ok"] else "lose"]
                        for k, b in benches.items()}}
 
+    def rereview(self, sid, reason):
+        """The owner withdraws an approval before the entry is evaluated (e.g. the review missed what it copies): a run
+        under way is stopped and charged as any run (its GPU time and agent use so far: kept on the account, set aside
+        from the entry's own charges, so a later run is charged anew), its machine released, its uploads cleared, the
+        approval dismissed on the PR and the entry reviewed again at its priority."""
+        s = self.db.sub(sid)
+        if s is None or s["status"] not in ("QUEUED", "RUNNING"):
+            raise ValueError(f"{sid}: only a queued or running entry can be sent back to review")
+        if s["status"] == "RUNNING":
+            r = self.db.run(sid)
+            try:
+                self.d.runner.stop(RunHandle(**r["handle"]))
+            except Exception:
+                log.exception("stop agent of %s", sid)
+            self._bill(s, end=self.now(), agent_usd=(r["sup_state"] or {}).get("usd"))
+        if self.d.fleet.get(sid) is not None:
+            self.d.fleet.release(sid, "sent back to review")
+        rec = s["record"]
+        stopped = rec.get("stopped_runs") or []
+        kept = sum(v for n, v in self.db.charged(sid).items() if n >= -1)
+        if kept:
+            self.db.set_aside(sid, f"{sid}/run-{len(stopped) + 1}")
+        self.d.private.delete_prefix(layout.staging_prefix(sid))
+        why = f"approval withdrawn by the owner: {reason}"[:2000]
+        self.d.github.dismiss_approvals(s["pr_number"], why)
+        self.d.github.comment(s["pr_number"], f"axonry: submission `{sid}` -> **back to review**: {why}"
+                              + (f" The run was stopped; its {kept / 1e6:.2f} USD are charged." if kept else ""))
+        tl = {k: v for k, v in rec["timeline"].items() if k not in ("kickoff", "deadline", "entered")}
+        self.db.update(sid, "REVIEW", locked_commit=None, reason_code=None, reason=None, record_patch={
+            "timeline": tl, "stopped_runs": stopped + [{"at": self.now(), "reason": why, "charged_usd": kept / 1e6}],
+            "fee": {**rec.get("fee", {}), "charged_usd": sum(self.db.charged(sid).values()) / 1e6}})
+        self._publish_line(s["base"])
+        log.info("%s: sent back to review (%s)", sid, reason)
+
     def disqualify(self, sid, reason):
         """The owner's public ruling on a run that broke the rules the checks cannot see (e.g. its published agent log
         shows benchmark data or outside weights brought in). It stops counting: a champion's title goes back to the

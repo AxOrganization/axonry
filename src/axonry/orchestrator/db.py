@@ -120,6 +120,11 @@ class DB:
         ends, as the run's own charges then cover it."""
         self.c.execute("INSERT OR IGNORE INTO charges VALUES(?,?,?,?,?)", (sid, n, coldkey, usd, time.time()))
 
+    def set_aside(self, sid, key):
+        """A stopped run's charges (GPU hours, settlement, agent use) kept on the account under `key`: the entry's own
+        run is charged anew (its review fee stays with it)."""
+        self.c.execute("UPDATE charges SET sid=? WHERE sid=? AND n >= -1", (key, sid))
+
     def refund(self, sid):
         """Our infrastructure lost the run: everything it was charged goes back (it runs again from the start)."""
         self.c.execute("DELETE FROM charges WHERE sid=?", (sid,))
