@@ -83,9 +83,13 @@ def table(title, headers, rows, st, right=()):
     return "\n".join([st(title, BOLD), line(headers, True), rule, *(line(r) for r in rows)]) + "\n"
 
 
-def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> str:
-    """benchmarks: those of the rules in force, shown even before an entry is decided on them ("-" where an entry
-    was decided under rules without one)."""
+def board(status: dict, line: dict | None, n=20, color=None, benchmarks=(), lines=None) -> str:
+    """line, benchmarks: the primary line's line.json and the benchmarks of its rules in force, shown even before an
+    entry is decided on them ("-" where an entry was decided under rules without one). lines: every line in force,
+    each {"base", "share", "line", "benchmarks"} (default: that one line)."""
+    lines = lines or [{"base": status.get("base"), "share": 1.0, "line": line, "benchmarks": benchmarks}]
+    many = len(lines) > 1
+    champs = {x["base"]: x.get("champion") for x in status.get("lines") or []}
     st = Style(sys.stdout.isatty() and not os.environ.get("NO_COLOR") if color is None else color)
     miners = {m["hotkey"]: m for m in status.get("miners", [])}
     repo = status.get("repo")
@@ -105,15 +109,17 @@ def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> s
 
     # 1. champion and queue
     rows = []
-    champ = status.get("champion")
-    if champ:
-        online = champ["hotkey"] in miners
-        detail = "receives the weight" if online else st("deregistered: weight burned (uid 0)", RED)
-        rows.append([st("★", YELLOW), uid(champ["hotkey"]), hot(champ["hotkey"]),
-                     champ["sid"], pr(champ.get("pr"), champ.get("title")), st("CHAMPION", BOLD, YELLOW), detail])
-    else:
-        rows.append([st("★", YELLOW), st("-", DIM), "-", "-", "base model", st("CHAMPION", BOLD, YELLOW),
-                     "no champion yet: weight burned (uid 0)"])
+    for x in lines:
+        champ = champs.get(x["base"], status.get("champion")) if many else status.get("champion")
+        of = f"{x['base']} ({x['share']:.0%} of the weight): " if many else ""
+        if champ:
+            online = champ["hotkey"] in miners
+            detail = of + ("receives the weight" if online else st("deregistered: weight burned (uid 0)", RED))
+            rows.append([st("★", YELLOW), uid(champ["hotkey"]), hot(champ["hotkey"]),
+                         champ["sid"], pr(champ.get("pr"), champ.get("title")), st("CHAMPION", BOLD, YELLOW), detail])
+        else:
+            rows.append([st("★", YELLOW), st("-", DIM), "-", "-", "base model", st("CHAMPION", BOLD, YELLOW),
+                         of + "no champion yet: weight burned (uid 0)"])
     queue = sorted(status.get("running", []) + status.get("evaluating", []) + status.get("queue", [])
                    + status.get("review", []), key=lambda x: tuple(x.get("priority") or (1 << 62, 0)))
     now = status.get("updated_at") or time.time()
@@ -128,14 +134,15 @@ def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> s
                   "ADMITTED": "benchmarks on the evaluation machine",
                   "SCORED": "decided once every earlier submission public before it is"}.get(x["status"], "")
         rows.append([str(i), uid(x["hotkey"]), hot(x["hotkey"]), x["sid"], pr(x["pr"], x.get("title")),
-                     st(label, col), detail])
+                     st(label, col), f"{x.get('base')}: {detail}" if many and x.get("base") else detail])
     out = [table("1. Champion and queue (priority order)", ["#", "UID", "HOTKEY", "SID", "PR", "STATUS", "DETAIL"],
                  rows, st, right=(0, 1))]
-    acc = ((line or {}).get("champion") or {}).get("accuracy")
-    if acc:     # the benchmarks of the rules in force, one added after it won included ("-": none yet), one they
-        keys = list(benchmarks) or list(acc)          # dropped left out
-        out.append(st("  champion's accuracy: " + " · ".join(
-            f"{k.split('@')[0]} {acc[k]:.1f}" if k in acc else f"{k.split('@')[0]} -" for k in keys), DIM))
+    for x in lines:
+        acc = ((x["line"] or {}).get("champion") or {}).get("accuracy")
+        if acc:     # the benchmarks of the rules in force, one added after it won included ("-": none yet), one they
+            keys = list(x["benchmarks"]) or list(acc)     # dropped left out
+            out.append(st(f"  champion's accuracy{' (' + x['base'] + ')' if many else ''}: " + " · ".join(
+                f"{k.split('@')[0]} {acc[k]:.1f}" if k in acc else f"{k.split('@')[0]} -" for k in keys), DIM))
 
     # 2. not in queue
     rows, seen = [], set()
@@ -156,13 +163,22 @@ def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> s
                          f"account: {bal:.2f} USD available"])
     out.append(table("2. Not in queue", ["UID", "HOTKEY", "SID", "PR", "STATUS", "DETAIL"], rows, st, right=(0,)))
 
-    # 3. recent matches
-    decided = sorted((r for r in (line or {}).get("entries", []) if r.get("scores")),
+    # 3. recent matches, per line
+    for x in lines:
+        out.append(_matches(x, n, st, uid, hot, pr, many))
+    out.append(st(f"status {_ts(status.get('updated_at'))} UTC · a uid is shown "
+                  "while the hotkey is registered · one miner in full: axonry-miner board <uid|hotkey|sid>", DIM))
+    return "\n".join(out)
+
+
+def _matches(x, n, st, uid, hot, pr, many) -> str:
+    """One line's last n decisions."""
+    decided = sorted((r for r in (x["line"] or {}).get("entries", []) if r.get("scores")),
                      key=lambda r: r.get("decided_at") or 0, reverse=True)[:n]
     # the rules in force only: a match judged under an earlier version shows what it shares with them ("-" else)
-    benches = list(benchmarks) or list(dict.fromkeys(k for r in decided for k in r["scores"]))
+    benches = list(x["benchmarks"]) or list(dict.fromkeys(k for r in decided for k in r["scores"]))
     rows = []
-    champ_line = (line or {}).get("champion") or {}
+    champ_line = (x["line"] or {}).get("champion") or {}
     for r in decided:
         later = champ_line.get("accuracy") or {} if r["sid"] == champ_line.get("sid") else {}
         cells = []
@@ -178,11 +194,8 @@ def board(status: dict, line: dict | None, n=20, color=None, benchmarks=()) -> s
                      "base" if (r.get("reference") or "").startswith("base:") else (r.get("reference") or "-"), *cells,
                      st("NEW CHAMPION", BOLD, GREEN) if won else st(f"no ({r.get('wins', 0)} wins)", DIM)])
     heads = ["DECIDED (UTC)", "UID", "HOTKEY", "SID", "PR", "VS", *(k.split("@")[0] for k in benches), "RESULT"]
-    out.append(table(f"3. Recent matches (last {n}): score[not-worse at, win at] vs the champion of the moment",
-                     heads, rows, st, right=(1,)))
-    out.append(st(f"status {_ts(status.get('updated_at'))} UTC · a uid is shown "
-                  "while the hotkey is registered · one miner in full: axonry-miner board <uid|hotkey|sid>", DIM))
-    return "\n".join(out)
+    return table(f"3. Recent matches{' of ' + x['base'] if many else ''} (last {n}): score[not-worse at, win at] vs "
+                 "the champion of the moment", heads, rows, st, right=(1,))
 
 
 def _ts(t):
@@ -340,14 +353,19 @@ def cmd_board(reader, n=20, color=None, watch=0, miner=None):
     in full instead of the overview."""
     while True:
         status = reader.get(layout.STATUS)
-        line = reader.get(layout.line(status["base"])) if status and status.get("base") else None
+        idx = reader.get(layout.INDEX) or {}
+        bases = idx.get("lines") or ([{"base": status["base"]}] if status and status.get("base") else [])
+        lines = [{"base": y["base"], "share": y.get("share", 1.0), "line": reader.get(layout.line(y["base"])),
+                  "benchmarks": [k["key"] for k in ((reader.rules(y["base"]) if idx else None) or {}).get("benchmarks", [])]}
+                 for y in bases]
+        line = lines[0]["line"] if lines else None
         if not status:
             text = "no status published yet"
-        elif miner:
-            text = detail(reader, status, line, miner, color)
+        elif miner:     # its entry may be on any line
+            text = detail(reader, status, {"entries": [r for x in lines for r in (x["line"] or {}).get("entries", [])]},
+                          miner, color)
         else:
-            rules = reader.rules() if reader.get(layout.INDEX) else None
-            text = board(status, line, n, color, [b["key"] for b in (rules or {}).get("benchmarks", [])])
+            text = board(status, line, n, color, lines[0]["benchmarks"] if lines else (), lines or None)
         if status and reader.base:
             text += (f"\n\nMore detail: {DASHBOARD}\nData: {reader.base}/{layout.STATUS}")
         print(("\033[H\033[2J" if watch else "") + text, flush=True)

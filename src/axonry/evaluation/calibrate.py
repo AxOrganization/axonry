@@ -24,6 +24,11 @@ def calibrate(executor, on, rules, registry_root=registry.ROOT, salts=("aa-1", "
     model_id = f"base:{rules['base']}"
     report["model"] = model_id
     outs = [executor.evaluate(on, model_id, base_doc, list(benches.values()), s) for s in salts]
+    if out:     # the per-question results beside the report, one file per salt and benchmark
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        for salt, o in zip(salts, outs):
+            for key, data in o.items():
+                Path(out).with_name(f"{Path(out).stem}.{salt}.{key}.jsonl").write_bytes(data)
     for key in keys:
         bench, params = benches[key], rules.judge_params(key)
         runs = [parse(o[key]) for o in outs]
@@ -42,13 +47,13 @@ def calibrate(executor, on, rules, registry_root=registry.ROOT, salts=("aa-1", "
     return report
 
 
-def scaled_registry(root: Path, limit=None, samples=None) -> Path:
+def scaled_registry(root: Path, base, limit=None, samples=None) -> Path:
     """A local copy of the registry (never committed) with smaller benchmark runs, for a quick calibration: the latest
-    rules version only, as its base's one version."""
+    rules version of `base`'s line only, as its one version."""
     shutil.rmtree(root, ignore_errors=True)
     shutil.copytree(registry.ROOT / "bases", root / "bases")
     (root / "benchmarks").mkdir(parents=True)
-    latest = registry.latest_rules().doc
+    latest = registry.load_rules_versions(base)[-1].doc
     for b in latest["benchmarks"]:
         doc = registry.load_benchmark(b["key"]).doc
         doc = {**doc, **({"limit": limit} if limit else {}), **({"samples_per_item": samples} if samples else {})}

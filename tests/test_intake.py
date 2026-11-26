@@ -123,10 +123,10 @@ def test_submission_dir():
 def test_check_content():
     entry = {"schema": "axonry.entry/1", "base": "qwen35-0.8b-think"}
     ok = {"entry.json": json.dumps(entry).encode(), "METHOD.md": b"m"}
-    assert binding.check_content(ok, RULES, COMP) == entry
-    assert binding.check_content({"METHOD.md": b"m"}, RULES, COMP).code == binding.BAD_PR
+    assert binding.check_content(ok, [RULES["base"]], COMP) == entry
+    assert binding.check_content({"METHOD.md": b"m"}, [RULES["base"]], COMP).code == binding.BAD_PR
     other = {**ok, "entry.json": json.dumps({**entry, "base": "other"}).encode()}
-    assert binding.check_content(other, RULES, COMP).code == binding.BASE_NOT_ALLOWED
+    assert binding.check_content(other, [RULES["base"]], COMP).code == binding.BASE_NOT_ALLOWED
 
 
 def test_a_deposit_is_priced_once_the_sources_are_back():

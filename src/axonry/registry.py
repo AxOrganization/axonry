@@ -4,10 +4,13 @@ Source files live in the repo under registry/ and are published unchanged to the
   registry/bases/<base_id>.json                -> bases/<base_id>.json
   registry/benchmarks/<id>@<version>.json      -> benchmarks/<id>@<version>.json
   registry/rules/<base_id>/<name>.json         -> rules/<sha256>.json
-The competition runs on one base model at a time. A rules version takes effect at `effective_block` (the latest one
-at or before a block is in force); the versions of one base form its line, whose champion carries on across them; a
-new base starts its own line. A submission keeps the version in force when it entered the queue. Nothing else in the
-code names a concrete base or benchmark.
+Each base model has its own line: its rules versions, whose champion carries on across them. A version takes effect at
+`effective_block` (the latest one of a line at or before a block is in force) and gives its line a `share` of the
+subnet's weight (1 when absent); the lines in force at a block are those whose version in force has a share, and their
+shares sum to 1, so several lines can run side by side and a line ends with a version of share 0. They share the
+subnet's own terms (netuid, treasury, accepted assets, competition repo pin). An entry names its base (entry.json) and
+keeps the version of that line in force at its commitment. Nothing else in the code names a concrete base or
+benchmark.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,8 +99,13 @@ def load_benchmark(key, root=ROOT):
     return Benchmark(doc["id"], doc["version"], doc)
 
 
+def share(rules) -> float:
+    """The line's share of the subnet's weight under this version."""
+    return float(rules.doc.get("share", 1.0))
+
+
 def latest_rules(root=ROOT) -> "Rules":
-    """The newest rules version (the one in force once its block is reached)."""
+    """The newest rules version of any line (its subnet terms are those of every line from its block on)."""
     return all_rules(root)[-1]
 
 
@@ -117,22 +125,41 @@ def load_rules_versions(base, root=ROOT):
 
 
 def all_rules(root=ROOT):
-    """Every rules version of every base, in the order they take effect (no two share a block)."""
-    out = [r for p in sorted((Path(root) / "rules").iterdir()) if p.is_dir() for r in load_rules_versions(p.name, root)]
-    blocks = [r["effective_block"] for r in out]
-    if len(set(blocks)) != len(blocks):
-        raise RegistryError("two rules versions share an effective_block")
-    return sorted(out, key=lambda r: r["effective_block"])
+    """Every rules version of every base, in the order they take effect (no two of one line share a block; lines
+    starting together are in base order)."""
+    out = []
+    for p in sorted((Path(root) / "rules").iterdir()):
+        if p.is_dir():
+            line = load_rules_versions(p.name, root)
+            if len({r["effective_block"] for r in line}) != len(line):
+                raise RegistryError(f"two rules versions of {p.name} share an effective_block")
+            out += line
+    return sorted(out, key=lambda r: r["effective_block"])      # stable: base order within a block
 
 
-def rules_at(block, root=ROOT):
-    """The rules version in force at `block` (latest effective_block <= block)."""
-    best = None
+def lines_at(block, root=ROOT) -> list:
+    """The lines in force at `block`: the version in force of every line that has a share, the line that started
+    first first (the primary one: index.json and weights.json name it at top level)."""
+    cur = {}
     for r in all_rules(root):
+        if r["effective_block"] <= block:
+            cur.setdefault(r["base"], []).append(r)
+    lines = [v[-1] for v in sorted(cur.values(), key=lambda v: v[0]["effective_block"]) if share(v[-1]) > 0]
+    if not lines:
+        raise RegistryError(f"no rules in force at block {block}")
+    return lines
+
+
+def rules_at(block, root=ROOT, base=None):
+    """The rules version in force at `block`: of `base`'s line, else of the primary line in force."""
+    if base is None:
+        return lines_at(block, root)[0]
+    best = None
+    for r in load_rules_versions(base, root):
         if r["effective_block"] <= block:
             best = r
     if best is None:
-        raise RegistryError(f"no rules in force at block {block}")
+        raise RegistryError(f"no rules of {base} in force at block {block}")
     return best
 
 
@@ -176,4 +203,17 @@ def validate(root=ROOT):
         j = r["judge"]
         if not 1 <= j["n_win"] <= len(r["benchmarks"]):
             errs.append(f"{at}: n_win {j['n_win']} out of range")
+        if not 0 <= share(r) <= 1:
+            errs.append(f"{at}: share {share(r)} out of [0, 1]")
+    for block in sorted({r["effective_block"] for r in versions}):    # the lines in force from each block on
+        try:
+            lines = lines_at(block, root)
+        except RegistryError as e:
+            errs.append(str(e))
+            continue
+        if abs(sum(share(r) for r in lines) - 1) > 1e-9:
+            errs.append(f"block {block}: the shares of the lines in force sum to {sum(share(r) for r in lines):g}, not 1")
+        terms = {canonical([r["netuid"], r["fee"]["treasury"], r["fee"]["assets"], r["competition"]]) for r in lines}
+        if len(terms) > 1:
+            errs.append(f"block {block}: the lines in force differ in netuid, treasury, assets or competition pin")
     return errs

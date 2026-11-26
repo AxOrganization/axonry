@@ -65,9 +65,9 @@ def carrier_problem(s, p, current=None, reduced=lambda p: False) -> str | None:
     return None
 
 
-def check_entry(entry_bytes: bytes | None, rules, comp_rules: dict) -> Rejected | dict:
+def check_entry(entry_bytes: bytes | None, bases, comp_rules: dict) -> Rejected | dict:
     """entry.json against the competition protocol (schema id: submission.entry_schema when the protocol names one)
-    and the rules (their one base)."""
+    and the bases whose lines it may enter."""
     if entry_bytes is None:
         return Rejected(BAD_ENTRY, "entry.json missing")
     try:
@@ -77,8 +77,9 @@ def check_entry(entry_bytes: bytes | None, rules, comp_rules: dict) -> Rejected 
     want = comp_rules["submission"].get("entry_schema")
     if not isinstance(entry, dict) or not isinstance(entry.get("base"), str) or (want and entry.get("schema") != want):
         return Rejected(BAD_ENTRY, f"entry.json needs base{f' and schema {want}' if want else ''}")
-    if entry["base"] != rules["base"]:
-        return Rejected(BASE_NOT_ALLOWED, f"base {entry['base']} is not the base of the rules, {rules['base']}")
+    if entry["base"] not in bases:
+        return Rejected(BASE_NOT_ALLOWED, f"base {entry['base']} is not the base of a line in force at the commitment "
+                                          f"({', '.join(bases)})")
     parent = entry.get("parent")
     if parent is not None and parent != CHAMPION:
         from ..common.ids import SID_RE  # noqa: PLC0415
@@ -88,10 +89,10 @@ def check_entry(entry_bytes: bytes | None, rules, comp_rules: dict) -> Rejected 
     return entry
 
 
-def check_content(blobs: dict, rules, comp_rules) -> Rejected | dict:
+def check_content(blobs: dict, bases, comp_rules) -> Rejected | dict:
     """The submission directory's files and entry.json -> entry, or why it cannot enter."""
     from .github import check_files  # noqa: PLC0415
     problem = check_files(blobs, comp_rules)
     if problem:
         return Rejected(BAD_PR, problem)
-    return check_entry(blobs.get("entry.json"), rules, comp_rules)
+    return check_entry(blobs.get("entry.json"), bases, comp_rules)

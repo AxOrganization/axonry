@@ -25,7 +25,7 @@ def test_store_write_once(tmp_path):
 
 def test_weights_sign_verify_and_monotonic(tmp_path):
     s = LocalStore(tmp_path, public=True)
-    doc = publisher.build_weights(7, "b", {"sid": "0000000001-0001", "hotkey": HK, "uid": 3}, 1, 100)
+    doc = publisher.build_weights(7, [{"base": "b", "share": 1.0, "champion": {"sid": "0000000001-0001", "hotkey": HK, "uid": 3}}], 1, 100)
     signed = publisher.publish_weights(s, doc, OWNER)
     assert v.check(signed, OWNER.ss58_address, 7, -1) is None
     assert v.check(signed, OWNER.ss58_address, 8, -1)
@@ -36,15 +36,15 @@ def test_weights_sign_verify_and_monotonic(tmp_path):
 
 
 def test_resolve_falls_back_to_uid0():
-    doc = publisher.build_weights(7, "b", {"sid": "x", "hotkey": HK, "uid": 3}, 1, 100)
+    doc = publisher.build_weights(7, [{"base": "b", "share": 1.0, "champion": {"sid": "x", "hotkey": HK, "uid": 3}}], 1, 100)
     assert v.resolve(doc, {3: HK}) == {3: 1.0}
     assert v.resolve(doc, {3: "someone else"}) == {0: 1.0}
-    assert v.resolve(publisher.build_weights(7, "b", None, 1, 100), {}) == {0: 1.0}
+    assert v.resolve(publisher.build_weights(7, [{"base": "b", "share": 1.0, "champion": None}], 1, 100), {}) == {0: 1.0}
 
 
 def test_validator_cycle_keeps_last_valid(tmp_path):
     s = LocalStore(tmp_path / "pub", public=True)
-    signed = publisher.publish_weights(s, publisher.build_weights(7, "b", {"sid": "x", "hotkey": HK, "uid": 3}, 1, 9),
+    signed = publisher.publish_weights(s, publisher.build_weights(7, [{"base": "b", "share": 1.0, "champion": {"sid": "x", "hotkey": HK, "uid": 3}}], 1, 9),
                                        OWNER)
     a = types.SimpleNamespace(url="u", owner=OWNER.ss58_address, netuid=7, max_age=10**9, version_key=0)
     state = v.State(tmp_path / "state.json")
@@ -62,7 +62,7 @@ def test_publish_registry(tmp_path):
     s = LocalStore(tmp_path, public=True)
     publisher.publish_registry(s)
     rules = registry.latest_rules()
-    publisher.publish_index(s, rules)
+    publisher.publish_index(s, [rules])
     idx = json.loads(s.get(layout.INDEX))
     assert json.loads(s.get(idx["rules"])) == rules.doc          # index -> the rules version in force, no copy
     assert s.get(layout.base_def("qwen35-0.8b-think")) and s.get(layout.benchmark_def("math500", 1))
@@ -70,12 +70,24 @@ def test_publish_registry(tmp_path):
 
 def test_the_owner_burns_a_share_beside_the_champion_and_validators_need_no_change():
     champ = {"sid": "s", "hotkey": "hk5", "uid": 5}
-    doc = publisher.build_weights(99, "b", champ, 3, 100, burn=0.3)
+    doc = publisher.build_weights(99, [{"base": "b", "share": 1.0, "champion": champ}], 3, 100, burn=0.3)
     assert v.check(doc, None, 99, 2) is None or "signature" in v.check(doc, None, 99, 2)
     assert v.resolve(doc, {5: "hk5"}) == {5: 0.7, 0: 0.3}
     assert v.resolve(doc, {5: "other"}) == {0: 1.0}                     # deregistered champion: all burned
-    assert v.resolve(publisher.build_weights(99, "b", champ, 3, 100, burn=1.0), {5: "hk5"}) == {0: 1.0}
-    assert v.resolve(publisher.build_weights(99, "b", champ, 3, 100), {5: "hk5"}) == {5: 1.0}
+    assert v.resolve(publisher.build_weights(99, [{"base": "b", "share": 1.0, "champion": champ}], 3, 100, burn=1.0), {5: "hk5"}) == {0: 1.0}
+    assert v.resolve(publisher.build_weights(99, [{"base": "b", "share": 1.0, "champion": champ}], 3, 100), {5: "hk5"}) == {5: 1.0}
+
+
+def test_lines_side_by_side_share_the_weight():
+    """Each line's share goes to its champion; a line without one (or the owner's burn) goes to uid0."""
+    champ = {"sid": "s", "hotkey": "hk5", "uid": 5}
+    lines = [{"base": "a", "share": 0.6, "champion": champ}, {"base": "b", "share": 0.4, "champion": None}]
+    doc = publisher.build_weights(99, lines, 3, 100)
+    assert doc["base"] == "a" and doc["champion"] == champ and doc["lines"] == lines
+    assert v.resolve(doc, {5: "hk5"}) == {5: 0.6, 0: 0.4}
+    assert v.resolve(publisher.build_weights(99, lines, 3, 100, burn=0.5), {5: "hk5"}) == {5: 0.3, 0: 0.7}
+    both = [lines[0], {"base": "b", "share": 0.4, "champion": {"sid": "t", "hotkey": "hk6", "uid": 6}}]
+    assert v.resolve(publisher.build_weights(99, both, 3, 100), {5: "hk5", 6: "hk6"}) == {5: 0.6, 6: 0.4}
 
 
 def test_weights_are_set_once_per_half_epoch_from_block_zero():

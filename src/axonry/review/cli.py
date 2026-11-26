@@ -53,7 +53,8 @@ def cmd_show(gh, rules, comp_rules, x):
     print(f"PR #{x['pr']}  commit {x['commit']}  directory {x['directory']}")
     print(f"content digest {digest}  {'== committed' if digest == x['content_digest'] else '!= COMMITTED - do not review'}")
     problem = check_files(blobs, comp_rules)
-    entry = binding.check_entry(blobs.get("entry.json"), rules, comp_rules)
+    entry = binding.check_entry(blobs.get("entry.json"), sorted({r["base"] for r in registry.all_rules()}),
+                                comp_rules)
     print(f"static checks: {problem or (entry.detail if isinstance(entry, binding.Rejected) else 'pass')}")
     for rel in sorted(blobs):
         print(f"  {len(blobs[rel]):>8}  {rel}")

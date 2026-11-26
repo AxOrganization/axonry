@@ -19,6 +19,8 @@
                                                      (hf repo + revision) and the sha256 of every file in DIR
   axonry-orchestrator registry pin-bench KEY            items_manifest_sha256 of the items built now (benchmarks/sources.py)
   axonry-orchestrator registry pin-competition          competition commit + rules.json sha256 into the latest rules
+  axonry-orchestrator registry activate [--block N]     the latest rules versions take effect at N (default: the
+                                                     finalized head now: in force as soon as they are deployed)
   axonry-orchestrator publish-registry                  publish definitions to the public bucket
   axonry-orchestrator publish-items                     build the rules' benchmark items (checked against their frozen
                                                      manifests) and publish them beside their definitions
@@ -37,7 +39,7 @@ from ..common.canon import read_json, sha256_file, sha256_hex, write_json
 from ..common.config import Config, private_store, public_store
 
 
-def fleet(cfg, db, rules):
+def fleet(cfg, db):
     """The GPU machines ([machines]): the owned hosts ([[machines.owned]]) first, then vast.ai ([vast], if enabled)."""
     from ..evaluation import benchdata  # noqa: PLC0415
     from ..pool import Machines  # noqa: PLC0415
@@ -47,14 +49,16 @@ def fleet(cfg, db, rules):
     root = Path(__file__).resolve().parents[3]
     memo = {}
 
-    # every benchmark of every rules version of the line: an entry is judged under the version it entered with, so
-    # one benchmark a newer version dropped is still evaluated for it (and its champion)
-    keys = dict.fromkeys(k for r in registry.load_rules_versions(rules["base"]) for k in r.benchmark_keys())
+    # every base and every benchmark of every rules version of every line: an entry is judged under the version it
+    # entered with, so one benchmark a newer version dropped is still evaluated for it (and its champion)
+    versions = registry.all_rules()
+    keys = dict.fromkeys(k for r in versions for k in r.benchmark_keys())
     benches = [registry.load_benchmark(k).doc for k in keys]
+    bases = [registry.load_base(b) for b in dict.fromkeys(r["base"] for r in versions)]
 
     def bundle():   # built once per process, from this checkout and the pinned competition repo
         if "path" not in memo:
-            memo["path"] = setup_bundle(root, cfg.path_of("competition.local_path"), [registry.load_base(rules["base"])],
+            memo["path"] = setup_bundle(root, cfg.path_of("competition.local_path"), bases,
                                         benches, cfg.path_of("state.work_dir") / "setup.tar")
         return memo["path"]
 
@@ -134,7 +138,7 @@ def build(cfg: Config):
     gh = GitHub(rules["competition"]["repo"], cfg.secret("competition.github_token"))
     owner = load_keypair(cfg.require("owner.wallet"), cfg.require("owner.hotkey"), cfg.get("owner.path"))
     db = DB(cfg.path_of("state.db"))
-    fl, runner = fleet(cfg, db, rules), make_runner(cfg)
+    fl, runner = fleet(cfg, db), make_runner(cfg)
 
     def issue(store, prefix, ttl):
         """Temporary credentials for one prefix of the store the orchestrator itself uses: what a machine writes
@@ -239,14 +243,14 @@ def cmd_restore(cfg, a):
 
 def cmd_calibrate(cfg, a):
     from ..evaluation.calibrate import calibrate, scaled_registry  # noqa: PLC0415
-    rules = registry.latest_rules()
+    base = a.base or registry.latest_rules()["base"]
     root = registry.ROOT
     if a.limit or a.samples:   # a scaled copy of the registry, never committed
-        root = scaled_registry(Path(".state/calibrate/registry"), limit=a.limit, samples=a.samples)
-        rules = registry.load_rules_versions(rules["base"], root)[-1]
+        root = scaled_registry(Path(".state/calibrate/registry"), base, limit=a.limit, samples=a.samples)
+    rules = registry.load_rules_versions(base, root)[-1]
     from ..pool.machine import EVAL  # noqa: PLC0415
     from .db import DB  # noqa: PLC0415
-    fl = fleet(cfg, DB(cfg.path_of("state.db")), rules)
+    fl = fleet(cfg, DB(cfg.path_of("state.db")))
     rented = fl.get(EVAL) is None
     if rented:
         fl.rent(EVAL, cfg.get("machines.eval_gpu_name", "RTX 4090"), int(cfg.get("machines.eval_gpus", 8)))
@@ -256,7 +260,8 @@ def cmd_calibrate(cfg, a):
             time.sleep(30)
         if state == "failed":
             raise SystemExit("the evaluation machine failed to set up (see the log); run calibrate again")
-        calibrate(eval_executor(cfg, fl), EVAL, rules, root, out=Path(".state/calibration.json"))
+        calibrate(eval_executor(cfg, fl), EVAL, rules, root, salts=tuple(a.salts.split(",")),
+                  out=Path(f".state/calibration-{base}.json"))
     finally:
         if rented:
             fl.release(EVAL)
@@ -294,16 +299,32 @@ def pin_bench(key, comp_repo, root=registry.ROOT):
 
 
 def pin_competition(comp_repo, root=registry.ROOT):
-    """Record the competition repo commit and rules.json sha256 in the latest rules version (edit it only before it
-    takes effect; afterwards add a new version instead)."""
+    """Record the competition repo commit and rules.json sha256 in the latest rules version, of every line staged at
+    its block (edit them only before they take effect; afterwards add new versions instead)."""
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=comp_repo, capture_output=True, text=True,
                             check=True).stdout.strip()
     rules_sha = sha256_hex(Path(comp_repo, "rules.json").read_bytes())
-    path = sorted((Path(root) / "rules" / registry.latest_rules(root)["base"]).glob("*.json"))[-1]
-    doc = read_json(path)
-    doc["competition"] = {**doc["competition"], "commit": commit, "rules_sha256": rules_sha}
-    write_json(path, doc)
-    return path, commit, rules_sha
+    block = registry.latest_rules(root)["effective_block"]
+    paths = [p for p in sorted((Path(root) / "rules").glob("*/*.json")) if read_json(p)["effective_block"] == block]
+    for path in paths:
+        doc = read_json(path)
+        doc["competition"] = {**doc["competition"], "commit": commit, "rules_sha256": rules_sha}
+        write_json(path, doc)
+    return paths, commit, rules_sha
+
+
+def activate(block, root=registry.ROOT):
+    """The rules versions staged together (every line's version at the latest effective_block) take effect at `block`
+    instead: launched as soon as they are deployed. Only for versions not in force yet; `block` must come after every
+    version already in force."""
+    latest = registry.latest_rules(root)["effective_block"]
+    paths = [p for p in sorted((Path(root) / "rules").glob("*/*.json")) if read_json(p)["effective_block"] == latest]
+    before = [r["effective_block"] for r in registry.all_rules(root) if r["effective_block"] != latest]
+    if before and block <= max(before):
+        raise SystemExit(f"block {block} is not after the versions already in force (up to {max(before)})")
+    for path in paths:
+        write_json(path, {**read_json(path), "effective_block": int(block)})
+    return paths
 
 
 def main(argv=None):
@@ -318,6 +339,9 @@ def main(argv=None):
     ca = sub.add_parser("calibrate", help="A/A noise of every benchmark on the evaluation GPUs (the base model against itself)")
     ca.add_argument("--limit", type=int, help="items per benchmark (default: the definitions')")
     ca.add_argument("--samples", type=int, help="samples per item (default: the definitions')")
+    ca.add_argument("--base", help="the line whose latest rules version is calibrated (default: the latest rules')")
+    ca.add_argument("--salts", default="aa-1,aa-2", help="the two seed salts (the line's own, axonry-<base>, gives "
+                                                         "the reference results its evaluations would)")
     rs = sub.add_parser("restore-state", help="replace the local state DB by a snapshot (default: the latest)")
     rs.add_argument("--key")
     sub.add_parser("publish-registry")
@@ -335,6 +359,7 @@ def main(argv=None):
     pb.add_argument("--model-dir", required=True)
     reg.add_parser("pin-bench").add_argument("key")
     reg.add_parser("pin-competition")
+    reg.add_parser("activate").add_argument("--block", type=int)
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if a.cmd == "registry" and a.reg == "validate":
@@ -372,6 +397,13 @@ def main(argv=None):
         print(json.dumps(pin_base(a.base_id, a.model_dir, cfg.path_of("competition.local_path")), indent=1)[:2000])
     elif a.reg == "pin-bench":
         print(pin_bench(a.key, cfg.path_of("competition.local_path"))["items_manifest_sha256"])
+    elif a.reg == "activate":
+        from ..chain.subtensor import Chain  # noqa: PLC0415
+        block = a.block if a.block is not None else Chain(cfg.get("chain.network", "finney")).finalized_head()
+        print(block, [str(p) for p in activate(block)])
+        errs = registry.validate()
+        if errs:
+            raise SystemExit("\n".join(errs))
     elif a.reg == "pin-competition":
         print(pin_competition(cfg.path_of("competition.local_path")))
     return 0

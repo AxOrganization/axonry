@@ -86,8 +86,8 @@ class FakeChain:
         return 0.01
 
 
-def blobs_for(n, parent=None):
-    return {"entry.json": json.dumps({"schema": "axonry.entry/1", "base": "qwen35-0.8b-think",
+def blobs_for(n, parent=None, base="qwen35-0.8b-think"):
+    return {"entry.json": json.dumps({"schema": "axonry.entry/1", "base": base,
                                       "parent": parent}).encode(),
             "METHOD.md": f"method of {n}".encode()}
 
@@ -372,6 +372,9 @@ def registry_copy(tmp_path, **rules_patch):
         shutil.copytree(registry.ROOT, root)
         for extra in sorted((root / "rules" / BASE).glob("*.json"))[1:]:   # the tests patch one rules version
             extra.unlink()
+        for other in (root / "rules").iterdir():                          # of one line
+            if other.name != BASE:
+                shutil.rmtree(other)
     rules_file = next((root / "rules" / BASE).glob("*.json"))
     doc = json.loads(rules_file.read_text())
     doc["fee"]["assets"] = ["tao", "alpha"]             # the tests pay in both
@@ -392,9 +395,9 @@ def deposit(chain, n, block, amount=FEE, asset="tao"):
     chain.blocks.setdefault(block, []).append(Deposit(block, 0, COLDKEYS[n], asset, amount, Clock.t))
 
 
-def pay(orch, chain, n, block, idx, parent=None, blobs=None):
+def pay(orch, chain, n, block, idx, parent=None, blobs=None, base="qwen35-0.8b-think"):
     """A miner's whole submission: a deposit covering one fee, the content committed, the PR opened."""
-    blobs = blobs or blobs_for(n, parent)
+    blobs = blobs or blobs_for(n, parent, base)
     deposit(chain, n, block)
     commit(chain, n, blobs, block, idx)
     number = len(orch.d.github.prs) + 1
@@ -1173,9 +1176,10 @@ def test_started_before_the_first_rules_it_waits(tmp_path):
     assert pub.get(layout.WEIGHTS) is None and orch.db.get("cursor") == 499
 
 
-def test_a_new_base_model_starts_its_own_line_and_the_old_one_stays(tmp_path):
-    """Rules moving to another base model: from their block that base's line is in force (no champion yet: the weight
-    is burned), the first line's champion, history and scores stay published, and index.json lists both."""
+def test_a_second_base_model_runs_its_own_line_beside_the_first(tmp_path):
+    """A second base model's line taking effect beside the first: from its block both lines are in force with their
+    shares of the weight (the new one has no champion yet: its share is burned), the first line's champion keeps its
+    share, and index.json lists both. An entry enters the line its entry.json names."""
     from axonry.common.canon import write_json
     orch, chain, clock, pub = make(tmp_path)
     orch.bootstrap()
@@ -1184,26 +1188,45 @@ def test_a_new_base_model_starts_its_own_line_and_the_old_one_stays(tmp_path):
     open_rules(orch, 101)
     run_until_quiet(orch, clock)
     sid_a = orch.db.champion(BASE)["sid"]
+    uid_a = chain.uid_of(orch.db.champion(BASE)["hotkey"], RULES["netuid"])
     root = Path(orch.d.registry_root)
     other = {**json.loads((root / "bases" / f"{BASE}.json").read_text()), "id": "other-base"}
     write_json(root / "bases" / "other-base.json", other)
-    rules = json.loads(next((root / "rules" / BASE).glob("*.json")).read_text())
+    rules = json.loads(sorted((root / "rules" / BASE).glob("*.json"))[-1].read_text())
+    write_json(root / "rules" / BASE / "v99.json", {**rules, "effective_block": 130, "share": 0.6})
     (root / "rules" / "other-base").mkdir()
-    write_json(root / "rules" / "other-base" / "v1.json", {**rules, "base": "other-base", "effective_block": 130})
+    write_json(root / "rules" / "other-base" / "v1.json", {**rules, "base": "other-base", "effective_block": 130,
+                                                             "share": 0.4})
+    assert registry.validate(root) == []
     orch.bootstrap()                                    # a new rules version comes with a deploy (a restart)
     orch.refresh_weights()
-    assert json.loads(pub.get(layout.WEIGHTS))["base"] == BASE                     # staged, not in force yet
+    assert json.loads(pub.get(layout.WEIGHTS))["weights"] == [{"hotkey": orch.db.champion(BASE)["hotkey"],
+                                                               "uid": uid_a, "weight": 1.0}]   # staged, not in force yet
     chain.head = 131
     orch.intake()
     orch.refresh_weights()
     w = json.loads(pub.get(layout.WEIGHTS))
-    assert w["base"] == "other-base" and w["weights"] == [{"hotkey": None, "uid": 0, "weight": 1.0}]
+    assert w["base"] == BASE and [(x["base"], x["share"]) for x in w["lines"]] == [(BASE, 0.6), ("other-base", 0.4)]
+    assert w["weights"] == [{"hotkey": orch.db.champion(BASE)["hotkey"], "uid": uid_a, "weight": 0.6},
+                            {"hotkey": None, "uid": 0, "weight": 0.4}]
     idx = json.loads(pub.get(layout.INDEX))
-    assert idx["base"] == "other-base" and [v["base"] for v in idx["versions"]] == [BASE, "other-base"]
+    assert [x["base"] for x in idx["lines"]] == [BASE, "other-base"]
+    assert {v["base"] for v in idx["versions"]} == {BASE, "other-base"}
     assert all(pub.get(v["rules"]) for v in idx["versions"])
-    old = json.loads(pub.get(layout.line(BASE)))
-    assert old["champion"]["sid"] == sid_a and [h["sid"] for h in old["history"]] == [sid_a]
-    assert next(r for r in old["entries"] if r["sid"] == sid_a)["decision"] == "NEW_CHAMPION"
+    assert next(r for r in json.loads(pub.get(layout.line(BASE)))["entries"] if r["sid"] == sid_a)["decision"] \
+        == "NEW_CHAMPION"
+    # an entry naming the second base enters its line, under that line's rules, and becomes its first champion
+    pay(orch, chain, "E", 132, 2, base="other-base")
+    chain.head = 132
+    run_until_quiet(orch, clock)
+    e = next(s for s in orch.db.subs() if s["base"] == "other-base")
+    assert orch.rules_for(e["sid"])["base"] == "other-base"
+    assert orch.db.champion("other-base")["sid"] == e["sid"] and orch.db.champion(BASE)["sid"] == sid_a
+    w = json.loads(pub.get(layout.WEIGHTS))
+    assert {x["uid"]: x["weight"] for x in w["weights"]} == {
+        uid_a: 0.6, chain.uid_of(e["hotkey"], RULES["netuid"]): 0.4}
+    status = json.loads(pub.get(layout.STATUS)) if pub.get(layout.STATUS) else None
+    assert status is None or [x["base"] for x in status["lines"]] == [BASE, "other-base"]
 
 
 def test_every_figure_of_a_decision_is_kept_for_good(tmp_path):

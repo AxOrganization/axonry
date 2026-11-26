@@ -19,7 +19,8 @@ One registration, one entry: a hotkey's first commitment on the subnet is its su
             reference)                                                           -> SCORED
   decide    SCORED in priority order vs the champion of the moment               -> PUBLISHED (+ weights, merge)
   janitor   staging uploads of finished submissions; old state snapshots
-The competition runs on one base model at a time; each base has its own line of champions (registry.py).
+Each base model has its own line of champions, several may run side by side, each with its share of the weight
+(registry.py); an entry enters the line of the base its entry.json names.
 Every external system is injected (see Deps), so the whole flow runs against fakes in tests.
 
 Status values (public): WAITING REVIEW QUEUED RUNNING COLLECTING ADMITTED SCORED PUBLISHED REJECTED FAILED
@@ -364,7 +365,14 @@ class Orchestrator:
             self._reject(sid, binding.REVEAL_EXPIRED, f"PR #{pr.number} was opened at {_utc(pr.opened_at)}, after "
                          f"the reveal deadline {_utc(by)} ({float(hours):g} h after the commitment)")
             return pr.number
-        entry = binding.check_content(self.d.github.dir_blobs(pr.head, pr.directory), rules, self.d.comp_rules)
+        lines = registry.lines_at(s["prio_block"], self.d.registry_root)      # the lines open at the commitment
+        entry = binding.check_content(self.d.github.dir_blobs(pr.head, pr.directory), [r["base"] for r in lines],
+                                      self.d.comp_rules)
+        if not isinstance(entry, binding.Rejected) and entry["base"] != s["base"]:   # it enters the line it names
+            rules = next(r for r in lines if r["base"] == entry["base"])
+            self.db.update(sid, base=entry["base"], record_patch={"rules_sha256": rules.sha256})
+            self._publish_line(s["base"])
+            s = self.db.sub(sid)
         if isinstance(entry, binding.Rejected):
             if rec.get("invalid") != self._content(s):
                 self.db.update(sid, record_patch={"invalid": self._content(s)})
@@ -1228,32 +1236,44 @@ class Orchestrator:
     def _fees(self, sid) -> dict:
         """What an entry pays (fee, agent budget, whether the review fee is kept): the rules in force now, for every
         entry whatever rules it entered under (the run itself - GPUs, hours, judge - stays its own rules')."""
-        return self._in_force(self.d.chain.finalized_head()) or self.rules_for(sid)
+        try:
+            return registry.rules_at(self.d.chain.finalized_head(), self.d.registry_root, self.db.sub(sid)["base"])
+        except registry.RegistryError:
+            return self.rules_for(sid)
 
     def _in_force(self, head):
-        """The rules in force at `head` (a next version may be staged), or None before the first takes effect."""
+        """The rules in force at `head` (a next version may be staged): the primary line's, or None before the first
+        takes effect."""
+        lines = self._lines(head)
+        return lines[0] if lines else None
+
+    def _lines(self, head) -> list:
+        """The lines in force at `head`, the primary one first ([] before the first takes effect)."""
         try:
-            return registry.rules_at(head, self.d.registry_root)
+            return registry.lines_at(head, self.d.registry_root)
         except registry.RegistryError:
-            return None
+            return []
+
+    def _line_weights(self, lines) -> list:
+        """Each line in force: its base, share and champion ({sid, hotkey, uid} or None: its share is burned)."""
+        out = []
+        for r in lines:
+            champ = self.db.champion(r["base"])
+            out.append({"base": r["base"], "share": registry.share(r), "champion": champ and {
+                "sid": champ["sid"], "hotkey": champ["hotkey"], "uid": self.d.chain.uid_of(champ["hotkey"], r["netuid"])}})
+        return out
 
     def publish_weights(self):
         head = self.d.chain.finalized_head()
-        rules = self._in_force(head)
-        if rules is None:
+        lines = self._lines(head)
+        if not lines:
             return
-        base = rules["base"]
-        champ = self.db.champion(base)
-        info = None
-        if champ:
-            uid = self.d.chain.uid_of(champ["hotkey"], rules["netuid"])
-            info = {"sid": champ["sid"], "hotkey": champ["hotkey"], "uid": uid}
         published = json.loads(self.d.public.get(layout.WEIGHTS) or "{}").get("sequence", 0)
         seq = max(self.db.get("weights_sequence", 0), published) + 1     # a restored state DB may lag behind
-        doc = publisher.build_weights(rules["netuid"], base, info, seq, head, burn=self.d.burn)
+        doc = publisher.build_weights(lines[0]["netuid"], self._line_weights(lines), seq, head, burn=self.d.burn)
         publisher.publish_weights(self.d.public, doc, self.d.owner_keypair)
         self.db.set("weights_sequence", seq)
-        publisher.publish_index(self.d.public, rules, self.d.registry_root)
+        publisher.publish_index(self.d.public, lines, self.d.registry_root)
 
     def bootstrap(self):
         """Publish definitions, every base model's line, the index of the rules in force, and a first weights.json
@@ -1263,8 +1283,8 @@ class Orchestrator:
             self._publish_line(base)
         if self.d.public.get(layout.WEIGHTS) is None:
             self.publish_weights()
-        elif rules := self._in_force(self.d.chain.finalized_head()):     # the rules in force, as now in the registry
-            publisher.publish_index(self.d.public, rules, self.d.registry_root)
+        elif lines := self._lines(self.d.chain.finalized_head()):     # the rules in force, as now in the registry
+            publisher.publish_index(self.d.public, lines, self.d.registry_root)
         self._reopen_refused()
 
     def _reopen_refused(self):
@@ -1287,22 +1307,24 @@ class Orchestrator:
         self.db.set("reopened_refused", True)
 
     def refresh_weights(self, max_age=86400):
-        """Re-issue weights.json when it is old, another base model's line is in force, the owner's burned share
-        changed, or the champion's uid changed (re-registration). index.json follows the rules version in force."""
+        """Re-issue weights.json when it is old, the lines in force or their shares changed, the owner's burned share
+        changed, or a champion's uid changed (re-registration). index.json follows the rules versions in force."""
         raw = self.d.public.get(layout.WEIGHTS)
         if raw is None:
             return self.publish_weights()
         cur = json.loads(raw)
-        champ = cur.get("champion")
-        moved = bool(champ) and self.d.chain.uid_of(champ["hotkey"], cur["netuid"]) != champ.get("uid")
-        rules = self._in_force(self.d.chain.finalized_head())
-        new_base = rules is not None and rules["base"] != cur.get("base")
+        lines = self._lines(self.d.chain.finalized_head())
+        if not lines:
+            return
+        def key(ls):
+            return [(x["base"], x["share"], *((x["champion"] or {}).get(k) for k in ("sid", "uid"))) for x in ls]
+        changed = key(self._line_weights(lines)) != key(publisher.weight_lines(cur))
         burn = cur.get("burn", 0.0) != self.d.burn             # the owner changed the burned share
-        if moved or new_base or burn or self.d.clock() - cur.get("issued_at", 0) > max_age:
+        if changed or burn or self.d.clock() - cur.get("issued_at", 0) > max_age:
             self.publish_weights()
-        elif rules is not None and (json.loads(self.d.public.get(layout.INDEX) or "{}").get("rules")
-                                    != layout.rules_version(rules.sha256)):
-            publisher.publish_index(self.d.public, rules, self.d.registry_root)    # a new rules version took effect
+        elif (json.loads(self.d.public.get(layout.INDEX) or "{}").get("lines")
+              != publisher.index_lines(lines)):
+            publisher.publish_index(self.d.public, lines, self.d.registry_root)    # a new rules version took effect
 
     def publish_status(self, every=50):    # under the 60 s tick, so that every tick publishes
         """status.json: everything in priority order - the review queue (reviewers take it top-down), the run queue,
@@ -1314,7 +1336,7 @@ class Orchestrator:
         def row(s):
             pr = s["record"].get("pr") or {}
             starting = s["status"] == "QUEUED" and self.d.fleet.get(s["sid"]) is not None   # its machine sets up
-            return {"sid": s["sid"], "hotkey": s["hotkey"], "github_id": s["record"].get("github_id"),
+            return {"sid": s["sid"], "base": s["base"], "hotkey": s["hotkey"], "github_id": s["record"].get("github_id"),
                     "pr": s["pr_number"], "title": pr.get("title"),
                     "status": "STARTING" if starting else s["status"],
                     "reason_code": None if starting else s["reason_code"], "reason": None if starting else s["reason"],
@@ -1323,14 +1345,16 @@ class Orchestrator:
                     "priority": [s["prio_block"], s["prio_index"]],
                     **({"revealed": self._revealed(s)} if self._content(s) != s["content_digest"] else {})}
         by_prio = sorted(self.db.subs(), key=self.priority)
-        rules = self._in_force(self.d.chain.finalized_head())
-        if rules is None:
+        lines = self._lines(self.d.chain.finalized_head())
+        if not lines:
             return
-        champ = self.db.champion(rules["base"])
+        rules = lines[0]
         accounts = self.db.accounts()
         doc = {"schema": publisher.SCHEMAS["status"], "updated_at": self.now(), "base": rules["base"],
                "repo": getattr(self.d.github, "repo", None),
-               "champion": self._champion_row(champ),
+               "champion": self._champion_row(self.db.champion(rules["base"])),      # the primary line's
+               "lines": [{"base": r["base"], "share": registry.share(r),
+                          "champion": self._champion_row(self.db.champion(r["base"]))} for r in lines],
                "miners": self._miners(rules["netuid"], accounts),
                "review": [row(s) for s in by_prio if s["status"] == "REVIEW"],
                "queue": [{**row(s), "position": i + 1}

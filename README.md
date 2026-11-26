@@ -44,8 +44,8 @@ its weight to the best model. The champion, the queue, every run and every resul
    paired with the current champion on the same questions and seeds.
 6. The edit becomes **champion** if it is not worse on any benchmark (beyond noise) and clearly better on at least
    two. Until there is a champion, the base model is the reference and the weight is burned (uid 0). The champion
-   receives the subnet's weight (`weights.json` shows any share the owner burns). Every edit, score and agent log is
-   public.
+   receives its line's share of the subnet's weight (`weights.json` shows any share the owner burns). Every edit,
+   score and agent log is public.
 
 **Not worse, clearly better.** On each benchmark, `d` is the edit's mean gain over the reference on the same items and
 `se` its paired standard error, both in percentage points. Not worse: `d >= -max(2*se, eps_tie)`; clearly better:
@@ -55,9 +55,11 @@ reference's public per-question results (`k` samples per item): a re-evaluation 
 `100 * sqrt(2 * sum(s_i^2) / k) / n`, with `s_i^2` the variance of item `i`'s samples and `n` the items; a match's
 `se` is usually somewhat larger.
 
-Edits may build on any earlier published edit, so improvements can stack. The competition runs on one base model at
-a time: when the rules move to a new base model, it starts its own line of champions (the earlier lines stay
-published).
+Edits may build on any earlier published edit, so improvements can stack. Each base model has its own **line** of
+champions, and several lines can run side by side: the rules give each line its share of the subnet's weight, which
+goes to that line's champion (burned while it has none). An entry enters the line of the base model its `entry.json`
+names, among the lines in force at its commitment, and is matched only within that line. A line that ends stays
+published.
 
 ## Taking part as a miner
 
@@ -141,7 +143,7 @@ fee. What an entry pays (these fees and the agent budget) is set by the rules in
    its own result is in, against the champion of that moment.
 
 The price, the GPUs, the run time, the base model, the benchmarks and the decision thresholds are part of the
-published rules (`axonry-miner` reads them for you).
+published rules of each line (`axonry-miner` reads them for you; `--base` picks a line for `price` and `deposit`).
 
 ## Running a validator
 
@@ -172,8 +174,8 @@ No storage keys, GPUs or data are needed.
 
 Everything the subnet decides is published at `https://storage.axonry.ai` and can be recomputed:
 
-- `index.json`: the base model and rules in force, and every rules version (they change only by new versions, from a
-  given block; on one base model the champion carries on);
+- `index.json`: the lines in force (base model, share of the weight, rules version), and every rules version (they
+  change only by new versions, from a given block; on one base model the champion carries on);
 - `status.json` (live, about once a minute): the queue, and every registered miner with its account (deposits,
   charges, held, available, in USD) and, while it runs, its run's progress line, GPU use and cost so far, and its
   agent (model, tokens so far in millions, cost so far in USD);

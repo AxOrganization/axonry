@@ -84,19 +84,30 @@ def publish_line(store, base, line: dict):
     _json(store, layout.line(base), {"schema": SCHEMAS["line"], "base": base, "updated_at": int(time.time()), **line})
 
 
-def build_weights(netuid, base, champion, sequence, block, fallback_uid=0, burn=0.0):
-    """champion: {"sid", "hotkey", "uid"} or None (base model is champion -> everything to fallback uid0 = burn).
-    burn: the owner's share of the weight burned (to uid0) even when there is a champion."""
-    if champion and champion.get("uid") is not None and burn < 1:
-        weights = [{"uid": champion["uid"], "hotkey": champion["hotkey"], "weight": round(1.0 - burn, 6)}]
-        if burn > 0:
-            weights.append({"uid": fallback_uid, "hotkey": None, "weight": round(burn, 6)})
-    else:
-        weights = [{"uid": fallback_uid, "hotkey": None, "weight": 1.0}]
-    return {"schema": SCHEMAS["weights"], "netuid": netuid, "sequence": sequence, "base": base,
-            "issued_at": int(time.time()), "issued_block": block, "champion": champion, "burn": burn,
-            "weights": weights,
+def build_weights(netuid, lines, sequence, block, fallback_uid=0, burn=0.0):
+    """lines: the lines in force, the primary one first, each {"base", "share", "champion": {"sid", "hotkey", "uid"} or
+    None}. A line's share goes to its champion, or to the fallback uid0 (burn) while it has none (or it is not
+    registered); burn: the owner's share of the weight burned (to uid0) beside the champions'. The top-level base and
+    champion are the primary line's."""
+    weights, burned = [], 0.0
+    for x in lines:
+        c = x["champion"]
+        if c and c.get("uid") is not None and burn < 1:
+            weights.append({"uid": c["uid"], "hotkey": c["hotkey"], "weight": round(x["share"] * (1.0 - burn), 6)})
+            burned += x["share"] * burn
+        else:
+            burned += x["share"]
+    if burned > 1e-9 or not weights:
+        weights.append({"uid": fallback_uid, "hotkey": None, "weight": round(burned, 6) if weights else 1.0})
+    return {"schema": SCHEMAS["weights"], "netuid": netuid, "sequence": sequence, "base": lines[0]["base"],
+            "issued_at": int(time.time()), "issued_block": block, "champion": lines[0]["champion"], "burn": burn,
+            "lines": lines, "weights": weights,
             "fallback": {"uid": fallback_uid, "reason": "no champion or champion hotkey not registered: uid0 (burn)"}}
+
+
+def weight_lines(doc) -> list:
+    """The lines a weights.json was issued for (one written before lines existed: its one base, share 1)."""
+    return doc.get("lines") or [{"base": doc.get("base"), "share": 1.0, "champion": doc.get("champion")}]
 
 
 def publish_weights(store, doc: dict, keypair):
@@ -113,12 +124,17 @@ def publish_weights(store, doc: dict, keypair):
     return signed
 
 
-def publish_index(store, rules_in_force, root=registry.ROOT):
-    """index.json: the entry point - the base model and the rules version in force, and every rules version (base,
-    effective block, key), so each base's line, past ones included, can be found without listing the bucket. Netuid,
-    owner and this location itself are published with the code (axonry_validator.network), not repeated here."""
-    _json(store, layout.INDEX, {"schema": SCHEMAS["index"], "base": rules_in_force["base"],
-                                "rules": layout.rules_version(rules_in_force.sha256),
+def index_lines(lines) -> list:
+    return [{"base": r["base"], "share": registry.share(r), "rules": layout.rules_version(r.sha256)} for r in lines]
+
+
+def publish_index(store, lines, root=registry.ROOT):
+    """index.json: the entry point - the lines in force (base, share of the weight, rules version; the primary one
+    also at top level), and every rules version (base, effective block, key), so each base's line, past ones included,
+    can be found without listing the bucket. Netuid, owner and this location itself are published with the code
+    (axonry_validator.network), not repeated here."""
+    _json(store, layout.INDEX, {"schema": SCHEMAS["index"], "base": lines[0]["base"],
+                                "rules": layout.rules_version(lines[0].sha256), "lines": index_lines(lines),
                                 "versions": [{"base": r["base"], "effective_block": r["effective_block"],
                                               "rules": layout.rules_version(r.sha256)}
                                              for r in registry.all_rules(root)]})

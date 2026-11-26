@@ -60,18 +60,23 @@ class PublicReader:
                 return None
             raise
 
-    def rules(self):
-        """The rules version in force (index.json names it)."""
+    def rules(self, base=None):
+        """The rules version in force of `base`'s line, else of the primary line (index.json names them)."""
         idx = self.get(layout.INDEX)
         if not idx:
             raise SystemExit("the subnet has not published its rules yet")
-        return self.get(idx["rules"])
+        lines = idx.get("lines") or [{"base": idx["base"], "rules": idx["rules"]}]
+        line = lines[0] if base is None else next((x for x in lines if x["base"] == base), None)
+        if line is None:
+            raise SystemExit(f"no line of base {base} is in force (lines: {', '.join(x['base'] for x in lines)})")
+        return self.get(line["rules"])
 
 
-def cmd_price(r, network):
+def cmd_price(r, network, base=None):
     """What a run costs, and what that is in TAO / alpha at this moment's price."""
     from .. import pricing  # noqa: PLC0415
-    rules = r.rules()
+    rules = r.rules(base)
+    print(f"base {rules['base']}")
     run, top = rules["run"], pricing.run_cost_musd(rules) / pricing.MUSD
     pad = 1 + rules["fee"].get("slippage", 0)          # what to send: room for the price moving before the block
     print(f"a run: {run['gpus']} x {run['gpu_model']}, at most {run['hours']} h")
@@ -117,13 +122,11 @@ def _prepare(a, r):
     import bittensor as bt  # noqa: PLC0415
     from bittensor_wallet import Wallet  # noqa: PLC0415
 
-    rules = r.rules()
     for f in ("entry.json", "METHOD.md"):
         if not os.path.isfile(os.path.join(a.dir, f)):
             raise SystemExit(f"{f} missing in {a.dir}")
     entry = json.load(open(os.path.join(a.dir, "entry.json")))
-    if entry.get("base") != rules["base"]:
-        raise SystemExit(f"entry.json base {entry.get('base')} is not the base in the rules, {rules['base']}")
+    rules = r.rules(entry.get("base"))           # the line of the base it names
     wallet = Wallet(name=a.wallet, hotkey=a.hotkey, **({"path": a.wallet_path} if a.wallet_path else {}))
     hk = wallet.hotkey.ss58_address
     if f"submissions/{hk}/" not in os.path.abspath(a.dir).replace(os.sep, "/") + "/":
@@ -189,7 +192,7 @@ def cmd_deposit(a, r):
     from .. import pricing  # noqa: PLC0415
     from ..chain.subtensor import Chain, submit_deposit  # noqa: PLC0415
 
-    rules = r.rules()
+    rules = r.rules(a.base)
     a.asset = a.asset or rules["fee"]["assets"][0]
     if a.asset not in rules["fee"]["assets"]:
         raise SystemExit(f"{a.asset} is not accepted (accepted: {', '.join(rules['fee']['assets'])})")
@@ -232,7 +235,7 @@ def main(argv=None):
     b.add_argument("-n", type=int, default=20, help="recent matches to show")
     b.add_argument("--no-color", action="store_true")
     b.add_argument("--watch", type=int, default=0, metavar="SECONDS", help="redraw every SECONDS (e.g. 60)")
-    sub.add_parser("price", help="what a run costs at most")
+    pr = sub.add_parser("price", help="what a run costs at most")
     c = sub.add_parser("commit", help="the hotkey's one entry: commit the content on chain, then push the PR")
     c.add_argument("--dir", required=True, help="submissions/<your hotkey>/<entry>/")
     c.add_argument("--github", required=True, help="GitHub login that opens (or opened) the pull request")
@@ -241,6 +244,8 @@ def main(argv=None):
     d.add_argument("--amount", type=float, help="default: what the account still lacks for a run, at the current price")
     d.add_argument("--asset", choices=("tao", "alpha"), help="default: the asset the rules accept")
     d.add_argument("--stake-hotkey", help="alpha: the hotkey (ss58) the stake to move sits on (default: --hotkey's)")
+    for s in (pr, d):
+        s.add_argument("--base", help="the line of this base model (default: the first line in force)")
     for s in (c, d):
         s.add_argument("--wallet", default="default", help="bittensor wallet name (default: default)")
         s.add_argument("--hotkey", default="default", help="the miner hotkey's name in that wallet (default: default)")
@@ -255,7 +260,7 @@ def main(argv=None):
         from .board import cmd_board  # noqa: PLC0415
         cmd_board(r, a.n, False if a.no_color else None, a.watch, a.miner)
     elif a.cmd == "price":
-        cmd_price(r, a.network)
+        cmd_price(r, a.network, a.base)
     elif a.cmd == "deposit":
         cmd_deposit(a, r)
     elif a.cmd == "commit":
