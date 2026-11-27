@@ -7,9 +7,9 @@ import json
 import time
 
 
-def limits_from(comp_rules: dict, hidden: int) -> dict:
+def limits_from(comp_rules: dict, hidden: int | None) -> dict:
     """The subset of the competition protocol (WeightSpaceProgramming rules.json, section "edit") that binds this run,
-    on a base of this hidden size."""
+    on a base of this hidden size (None: a base pinned before its definition recorded it; the brief gives the rule)."""
     from ..evaluation.admit_remote import edit_limits, payload_limit  # noqa: PLC0415
     e = comp_rules["edit"]
     t = edit_limits(comp_rules)
@@ -18,7 +18,8 @@ def limits_from(comp_rules: dict, hidden: int) -> dict:
         "ops_allowed": e["ops"],
         "payload": e["payload"],
         "relative_change": e["relative_change"],
-        "max_payload_bytes": payload_limit(comp_rules, hidden),
+        "max_payload_bytes": payload_limit(comp_rules, hidden) if hidden else None,
+        "max_payload_bytes_per_hidden": t["max_payload_bytes_per_hidden"],
         "max_relative_change_per_tensor": t["max_relative_change_per_tensor"],
         "max_global_relative_change": t["max_global_relative_change"],
         "upload_files": comp_rules["upload"]["files"],
@@ -106,7 +107,7 @@ own rule: choices on dev sets, holdout only to confirm a frozen edit.
 ## Rules for the edit (violations are rejected before evaluation, with the reason published)
 - Editable: {lim['editable_tensors']}
 - Ops: {', '.join(lim['ops_allowed'])} (declarative, applied to the starting model's weights).
-- Payload (arrays in the spec) at most {lim['max_payload_bytes']} bytes on this base; any number of tensors.
+- Payload (arrays in the spec) at most {lim['max_payload_bytes'] or str(lim['max_payload_bytes_per_hidden']) + ' x the base' + chr(39) + 's hidden size'} bytes on this base; any number of tensors.
 - Relative change at most {lim['max_relative_change_per_tensor']} per tensor and {lim['max_global_relative_change']} over all editable matrices.
 - Payload: {lim['payload']}.
 - Relative change: {lim['relative_change']}.

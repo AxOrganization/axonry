@@ -13,7 +13,6 @@
   "vocab.json": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
  },
  "hf_repo": "Qwen/Qwen3.5-0.8B",
- "hidden_size": 1024,
  "id": "qwen35-0.8b-think",
  "revision": "2fc06364715b967f1860aea9cf38778875588b17",
  "schema": "axonry.base/1"

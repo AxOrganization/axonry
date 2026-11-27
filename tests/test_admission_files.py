@@ -32,5 +32,5 @@ def test_the_payload_limit_grows_with_the_base_width_from_the_registry_hidden_si
     from axonry.evaluation.admit_remote import hidden_size, payload_limit
     (tmp_path / "config.json").write_text(json.dumps({"text_config": {"hidden_size": 2048}}))
     assert payload_limit(RULES, hidden_size(tmp_path)) == 8 << 20
-    assert [limits_from(RULES, registry.load_base(b)["hidden_size"])["max_payload_bytes"]
-            for b in ("qwen35-0.8b-think", "qwen35-2b-think")] == [4 << 20, 8 << 20]
+    assert limits_from(RULES, registry.load_base("qwen35-2b-think")["hidden_size"])["max_payload_bytes"] == 8 << 20
+    assert limits_from(RULES, 1024)["max_payload_bytes"] == 4 << 20

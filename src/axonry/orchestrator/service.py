@@ -567,7 +567,7 @@ class Orchestrator:
                             "jump": m.jump and {"host": m.jump.host, "port": m.jump.port, "user": m.jump.user,
                                                 "host_key": m.jump.host_key()}},
                 "r2": creds.as_dict(),
-                "limits": brief.limits_from(self.d.comp_rules, base["hidden_size"]),
+                "limits": brief.limits_from(self.d.comp_rules, base.get("hidden_size")),
                 "judge": self._judge_view(rules, rec),
                 "base_name": registry.base_name(base)}
         champ = task["judge"]["champion"]
