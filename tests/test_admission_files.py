@@ -24,3 +24,13 @@ def test_an_upload_and_its_parent_pass_the_file_check(tmp_path):
 def test_anything_else_in_an_upload_is_refused(tmp_path):
     assert violations(tmp_path, ["edit.json", "REPORT.md", "weights.safetensors"]) == \
         ["weights.safetensors: not an upload file (REPORT.md, edit.json, edit.npz)"]
+
+
+def test_the_payload_limit_grows_with_the_base_width_from_the_registry_hidden_size(tmp_path):
+    from axonry import registry
+    from axonry.agent.brief import limits_from
+    from axonry.evaluation.admit_remote import hidden_size, payload_limit
+    (tmp_path / "config.json").write_text(json.dumps({"text_config": {"hidden_size": 2048}}))
+    assert payload_limit(RULES, hidden_size(tmp_path)) == 8 << 20
+    assert [limits_from(RULES, registry.load_base(b)["hidden_size"])["max_payload_bytes"]
+            for b in ("qwen35-0.8b-think", "qwen35-2b-think")] == [4 << 20, 8 << 20]

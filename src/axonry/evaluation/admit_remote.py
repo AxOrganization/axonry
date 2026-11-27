@@ -8,8 +8,9 @@ on the run's machine (`axonry-check`, the agent's self-check) — one code path 
 
 Prints {"passed", "violations": [...], "info": {...}, "model_digest", "model_dir"}; exit code 0 iff passed.
 Checks: file types; edit.json present and its base == the submission's base; REPORT.md present; ops whitelisted;
-tensors editable (2-D .weight matrices of the main decoder stack); payload bytes within edit.limits (this spec's own
-ops, wsp.edits.spec_size; the number of tensors is not limited); then the spec (with its parent chain) is built on the verified base and the
+tensors editable (2-D .weight matrices of the main decoder stack); payload bytes within edit.limits
+(max_payload_bytes_per_hidden x the base's hidden size; this spec's own ops, wsp.edits.spec_size; the number of
+tensors is not limited); then the spec (with its parent chain) is built on the verified base and the
 relative change of its own layer vs the parent model is checked per tensor and globally. The no-overfitting rule
 is normative: admission enforces the limits, it does not judge how the spec was obtained.
 """
@@ -33,6 +34,17 @@ def load_rules():
 def edit_limits(rules):
     """The one set of limits that binds every edit (competition rules.json -> edit.limits)."""
     return rules["edit"]["limits"]
+
+
+def hidden_size(base_dir):
+    """The base's hidden size, from its config.json (a multimodal config keeps it under text_config)."""
+    cfg = json.loads((Path(base_dir) / "config.json").read_text())
+    return cfg.get("text_config", cfg)["hidden_size"]
+
+
+def payload_limit(rules, hidden):
+    """The largest payload (bytes) of an edit on a base this wide (as wsp.rules.payload_limit computes it)."""
+    return edit_limits(rules)["max_payload_bytes_per_hidden"] * hidden
 
 
 def tensor_violation(name, prefix, ndim=None):
@@ -68,8 +80,8 @@ def model_digest(man):
     return h.hexdigest()
 
 
-def static_checks(spec_dir, spec, rules, prefix=None, ndims=None):
-    """Checks that need no weights (prefix/ndims: from the base's tensor index when available)."""
+def static_checks(spec_dir, spec, rules, prefix=None, ndims=None, max_payload=None):
+    """Checks that need no weights (prefix/ndims/max_payload: from the base when available)."""
     out = []
     e = rules["edit"]
     allowed = {f.removeprefix("edit/") for f in rules["upload"]["files"]}   # what an upload holds (and each parent)
@@ -80,7 +92,6 @@ def static_checks(spec_dir, spec, rules, prefix=None, ndims=None):
             out.append(f"{p.relative_to(spec_dir)}: not an upload file ({', '.join(sorted(allowed))})")
     required = [f.removeprefix("edit/") for f in rules["upload"]["required"]]
     out += [f"missing {f}" for f in required if not (Path(spec_dir) / f).exists()]
-    lim = edit_limits(rules)
     ops = spec.get("ops")
     if not isinstance(ops, list) or not ops:
         return out + ["edit.json: no ops"], {}
@@ -97,9 +108,9 @@ def static_checks(spec_dir, spec, rules, prefix=None, ndims=None):
         n, pb = spec_size(Path(spec_dir) / "edit.json")
     except Exception as ex:
         return out + [f"edit arrays unreadable: {type(ex).__name__}: {ex}"], {}
-    if pb > lim["max_payload_bytes"]:
-        out.append(f"payload {pb} bytes > {lim['max_payload_bytes']}")
-    return out, {"tensors": n, "payload_bytes": pb}
+    if max_payload is not None and pb > max_payload:
+        out.append(f"payload {pb} bytes > {max_payload}")
+    return out, {"tensors": n, "payload_bytes": pb, "max_payload_bytes": max_payload}
 
 
 def magnitude_checks(man, lim, total_norm):
@@ -145,7 +156,8 @@ def admit(spec_dir, base_dir, base_id, build_dir=None, rules=None):
         if n in idx and n not in ndims:
             with safe_open(str(Path(base_dir) / idx[n]), "pt") as f:
                 ndims[n] = len(f.get_slice(n).get_shape())
-    v, info = static_checks(spec_dir, spec, rules, prefix, {**{k: None for k in idx}, **ndims})
+    v, info = static_checks(spec_dir, spec, rules, prefix, {**{k: None for k in idx}, **ndims},
+                            payload_limit(rules, hidden_size(base_dir)))
     res["violations"] += v
     res["info"].update(info)
     if res["violations"]:

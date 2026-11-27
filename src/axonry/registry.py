@@ -21,7 +21,7 @@ from .common.canon import canonical, read_json, sha256_hex
 
 ROOT = Path(__file__).resolve().parents[2] / "registry"
 
-BASE_FIELDS = {"schema", "id", "hf_repo", "revision", "files"}
+BASE_FIELDS = {"schema", "id", "hf_repo", "revision", "hidden_size", "files"}
 BENCH_FIELDS = {"schema", "id", "version", "adapter", "task", "samples_per_item", "items_manifest_sha256", "judge"}
 RULES_FIELDS = {"schema", "netuid", "base", "benchmarks", "judge", "fee", "run",
                 "competition", "review"}

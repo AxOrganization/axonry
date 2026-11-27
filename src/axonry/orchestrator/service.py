@@ -555,6 +555,7 @@ class Orchestrator:
         m = self.d.fleet.hand_over(sid, public_key, deadline)
         resources = self.d.fleet.probe(sid)
         creds = self.d.issue_creds(self.d.private, layout.staging_prefix(sid), ttl)
+        base = registry.load_base(rec["base"], self.d.registry_root)
         task = {"schema": "axonry.task/1", "sid": sid, "hotkey": s["hotkey"],
                 "base": rec["base"], "rules_sha256": rules.sha256,
                 "upload_protocol": self.d.comp_rules["upload"]["schema"],
@@ -566,9 +567,9 @@ class Orchestrator:
                             "jump": m.jump and {"host": m.jump.host, "port": m.jump.port, "user": m.jump.user,
                                                 "host_key": m.jump.host_key()}},
                 "r2": creds.as_dict(),
-                "limits": brief.limits_from(self.d.comp_rules),
+                "limits": brief.limits_from(self.d.comp_rules, base["hidden_size"]),
                 "judge": self._judge_view(rules, rec),
-                "base_name": registry.base_name(registry.load_base(rec["base"], self.d.registry_root))}
+                "base_name": registry.base_name(base)}
         champ = task["judge"]["champion"]
         task["starts"] = ([{"sid": rec["parent"], "role": "parent"}] if rec.get("parent") else []) + \
             ([{"sid": champ, "role": "champion"}] if champ and champ != rec.get("parent") else [])
