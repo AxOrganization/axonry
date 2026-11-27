@@ -43,7 +43,8 @@ def hidden_size(base_dir):
 
 
 def payload_limit(rules, hidden):
-    """The largest payload (bytes) of an edit on a base this wide (as wsp.rules.payload_limit computes it)."""
+    """The largest payload (bytes) of an edit on a base this wide, where its directory is not at hand (the brief);
+    admission itself calls wsp.rules.payload_limit on the verified base."""
     return edit_limits(rules)["max_payload_bytes_per_hidden"] * hidden
 
 
@@ -133,6 +134,7 @@ def magnitude_checks(man, lim, total_norm):
 def admit(spec_dir, base_dir, base_id, build_dir=None, rules=None):
     from safetensors import safe_open  # noqa: PLC0415
     from wsp.edits import build, decoder_prefix, tensor_index  # noqa: PLC0415
+    from wsp.rules import payload_limit as wsp_payload_limit  # noqa: PLC0415
 
     rules = rules or load_rules()
     spec_dir = Path(spec_dir)
@@ -157,7 +159,7 @@ def admit(spec_dir, base_dir, base_id, build_dir=None, rules=None):
             with safe_open(str(Path(base_dir) / idx[n]), "pt") as f:
                 ndims[n] = len(f.get_slice(n).get_shape())
     v, info = static_checks(spec_dir, spec, rules, prefix, {**{k: None for k in idx}, **ndims},
-                            payload_limit(rules, hidden_size(base_dir)))
+                            wsp_payload_limit(base_dir))
     res["violations"] += v
     res["info"].update(info)
     if res["violations"]:
