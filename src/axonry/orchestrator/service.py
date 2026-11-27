@@ -894,8 +894,13 @@ class Orchestrator:
             log.info("%s archived as one edit on the base (%d ops, lineage %s)", sid, res["ops"], lineage)
 
     def _publish_agent(self, sid, rec):
+        """The run's agent log, less any messages the owner chose to leave out (record "omit_messages": chat ids)."""
         d = Path(self.d.work_dir) / sid / "agent"
         if rec.get("agent_log") == "published" and d.exists():
+            if rec.get("omit_messages") and (d / "chat.json").exists():
+                doc = json.loads((d / "chat.json").read_text())
+                doc["messages"] = [m for m in doc.get("messages", []) if m.get("id") not in rec["omit_messages"]]
+                (d / "chat.json").write_text(json.dumps(doc, indent=1, ensure_ascii=False))
             publisher.publish_dir(self.d.public, layout.submission_agent_prefix(sid), d)
 
     # ------------------------------------------------------------------------------------------- failures
