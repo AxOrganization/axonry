@@ -148,6 +148,9 @@ class FakeGitHub:
     def close(self, number):
         self.prs[number]["state"] = "closed"
 
+    def reopen(self, number):
+        self.prs[number]["state"] = "open"
+
     def candidates(self):
         """What intake.github.scan reports: open PRs and the content digest at their head."""
         out = []
@@ -1068,6 +1071,35 @@ def test_the_owner_sends_a_running_entry_back_to_review_and_its_run_is_charged(t
     run_until_quiet(orch, clock)
     assert orch.db.champion(BASE)["sid"] == sa and orch.d.runner.kicked.count(sa) == 2
     assert orch.db.accounts()[COLDKEYS["A"]]["charged_usd"] > sum(orch.db.charged(sa).values()) / 1e6
+
+
+def test_the_owner_runs_a_failed_entry_again_at_its_priority(tmp_path):
+    """rerun: a failed entry whose review stands is queued again, its PR reopened; the failed run's charges stay on
+    the account, set aside from the entry's own, and the new run decides it."""
+    orch, chain, clock, pub = make(tmp_path)
+    v = blobs_for("A")
+    commit(chain, "A", v, 101)
+    deposit(chain, "A", 101, 3 * FEE)
+    orch.d.github.add_pr(1, HOTKEYS["A"], "a1", v)
+    chain.head = 101
+    open_rules(orch, 101)
+    sa = "0000000101-0001"
+    orch.schedule()
+    clock.t += int(1.5 * 3600)
+    orch.supervise()
+    orch.d.fleet.release(sa)
+    orch._reject(sa, "NO_UPLOAD", "no manifest.json uploaded", final_status="FAILED")   # as the run's end would
+    assert orch.d.github.prs[1]["state"] == "closed"
+    before = orch.db.accounts()[COLDKEYS["A"]]["charged_usd"]
+    orch.rerun(sa, "its method needed a champion the line did not have yet")
+    s = orch.db.sub(sa)
+    assert s["status"] == "QUEUED" and s["reason_code"] is None and orch.d.github.prs[1]["state"] == "open"
+    assert "queued again" in orch.d.github.comments[-1][1] and set(orch.db.charged(sa)) <= {REVIEW_FEE}
+    assert pub.get(f"submissions/{sa}/submission.json") is None
+    assert json.loads(pub.get(f"submissions/{sa}/run-1/submission.json"))["reason_code"] == "NO_UPLOAD"
+    assert orch.db.accounts()[COLDKEYS["A"]]["charged_usd"] >= before                 # kept on the account
+    run_until_quiet(orch, clock)
+    assert orch.db.champion(BASE)["sid"] == sa and orch.d.runner.kicked.count(sa) == 2
 
 
 def test_a_failed_start_keeps_the_machine(tmp_path):

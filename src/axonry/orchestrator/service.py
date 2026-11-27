@@ -31,6 +31,7 @@ REVIEW_CHANGES, BAD_PARENT; NO_UPLOAD, BAD_UPLOAD, REJECTED_RULES, EVAL_ERROR; d
 import io
 import json
 import logging
+import re
 import shutil
 import tarfile
 import tempfile
@@ -1188,6 +1189,39 @@ class Orchestrator:
             "fee": {**rec.get("fee", {}), "charged_usd": sum(self.db.charged(sid).values()) / 1e6}})
         self._publish_line(s["base"])
         log.info("%s: sent back to review (%s)", sid, reason)
+
+    def rerun(self, sid, reason):
+        """The owner runs a failed entry again (its review stands): queued at its priority, its PR reopened; the
+        failed run's charges are kept on the account, set aside from the entry's own, so the new run is charged anew;
+        its published files (record, agent log) move to submissions/<sid>/run-<k>/."""
+        s = self.db.sub(sid)
+        if s is None or s["status"] != "FAILED" or not s["locked_commit"]:
+            raise ValueError(f"{sid}: only a failed entry that passed review can run again")
+        rec = s["record"]
+        stopped = rec.get("stopped_runs") or []
+        kept = sum(v for n, v in self.db.charged(sid).items() if n >= -1)
+        if kept:
+            self.db.set_aside(sid, f"{sid}/run-{len(stopped) + 1}")
+        self.d.private.delete_prefix(layout.staging_prefix(sid))
+        run = f"run-{len(stopped) + 1}"           # the failed run's public files (write-once) move to its archive
+        top = layout.submission(sid)
+        for key, _ in list(self.d.public.list(top)):
+            rest = key[len(top):]
+            if not re.match(r"run-\d+/", rest):
+                self.d.public.put(f"{top}{run}/{rest}", self.d.public.get(key))
+                self.d.public.delete_prefix(key)
+        why = f"run again by the owner: {reason}"[:2000]
+        self.d.github.reopen(s["pr_number"])
+        self.d.github.comment(s["pr_number"], f"axonry: submission `{sid}` -> **queued again**: {why}"
+                              + (f" The failed run's {kept / 1e6:.2f} USD are charged." if kept else ""))
+        tl = {k: v for k, v in rec["timeline"].items() if k not in ("kickoff", "deadline", "agent_end")}
+        self.db.update(sid, "QUEUED", reason_code=None, reason=None, decided_at=None, record_patch={
+            "timeline": tl, "pr_result": None,
+            "stopped_runs": stopped + [{"at": self.now(), "reason": f"{s['reason_code']}: {s['reason']}",
+                                        "charged_usd": kept / 1e6}],
+            "fee": {**rec.get("fee", {}), "charged_usd": sum(self.db.charged(sid).values()) / 1e6}})
+        self._publish_line(s["base"])
+        log.info("%s: queued again (%s)", sid, reason)
 
     def disqualify(self, sid, reason):
         """The owner's public ruling on a run that broke the rules the checks cannot see (e.g. its published agent log

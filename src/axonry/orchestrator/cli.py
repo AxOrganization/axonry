@@ -337,6 +337,9 @@ def main(argv=None):
     dq = sub.add_parser("disqualify", help="public owner ruling: an evaluated submission broke the rules")
     dq.add_argument("sid")
     dq.add_argument("--reason", required=True)
+    ru = sub.add_parser("rerun", help="the owner runs a failed entry again at its priority (its review stands)")
+    ru.add_argument("sid")
+    ru.add_argument("--reason", required=True)
     rr = sub.add_parser("rereview", help="the owner withdraws an approval: the entry is reviewed again")
     rr.add_argument("sid")
     rr.add_argument("--reason", required=True)
@@ -368,6 +371,8 @@ def main(argv=None):
         cmd_calibrate(cfg, a)
     elif a.cmd == "disqualify":
         build(cfg).disqualify(a.sid, a.reason)
+    elif a.cmd == "rerun":
+        build(cfg).rerun(a.sid, a.reason)
     elif a.cmd == "rereview":
         build(cfg).rereview(a.sid, a.reason)
     elif a.cmd == "publish-registry":

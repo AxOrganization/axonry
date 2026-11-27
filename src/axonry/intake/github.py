@@ -127,6 +127,9 @@ class GitHub:
     def close(self, number: int):
         return self._get(f"/repos/{self.repo}/pulls/{number}", method="PATCH", body={"state": "closed"})
 
+    def reopen(self, number: int):
+        return self._get(f"/repos/{self.repo}/pulls/{number}", method="PATCH", body={"state": "open"})
+
     def comment(self, number: int, text: str):
         return self._get(f"/repos/{self.repo}/issues/{number}/comments", method="POST", body={"body": text})
 
