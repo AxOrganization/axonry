@@ -46,7 +46,7 @@ def _judged(task) -> str:
     j = task.get("judge")
     if not j:
         return ""
-    now = f"now `{j['champion'] or task.get('base_name')}`"      # until an entry wins, the base model holds the title
+    now = f"now `{j['champion']}`"
     return f"""
 ## How the edit is judged
 Against the champion when it is judged ({now}), on the benchmarks: the edit must be worse on none of them (beyond their noise) and clearly better on at least {j['n_win']}.

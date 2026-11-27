@@ -569,9 +569,9 @@ class Orchestrator:
                                                 "host_key": m.jump.host_key()}},
                 "r2": creds.as_dict(),
                 "limits": brief.limits_from(self.d.comp_rules, base.get("hidden_size")),
-                "judge": self._judge_view(rules, rec),
+                "judge": self._judge_view(rules, rec, base),
                 "base_name": registry.base_name(base)}
-        champ = task["judge"]["champion"]
+        champ = (self.db.champion(rec["base"]) or {}).get("sid")
         task["starts"] = ([{"sid": rec["parent"], "role": "parent"}] if rec.get("parent") else []) + \
             ([{"sid": champ, "role": "champion"}] if champ and champ != rec.get("parent") else [])
         bundle = self._bundle(task, blobs)   # the only place the run's secrets go
@@ -583,10 +583,11 @@ class Orchestrator:
             "timeline": {**rec["timeline"], "kickoff": start, "deadline": deadline},
             "sandbox": {"resources": resources}})
 
-    def _judge_view(self, rules, rec) -> dict:
-        """What the run is judged against: its rules' wins needed and the champion when it starts (None: the base)."""
+    def _judge_view(self, rules, rec, base) -> dict:
+        """What the run is judged against: its rules' wins needed and the champion when it starts (until an entry
+        wins, the base model, by its full name)."""
         champ = self.db.champion(rec["base"])
-        return {"n_win": rules["judge"]["n_win"], "champion": champ["sid"] if champ else None}
+        return {"n_win": rules["judge"]["n_win"], "champion": champ["sid"] if champ else registry.base_name(base)}
 
     def _bundle_path(self, sid) -> Path:
         return Path(self.d.work_dir) / sid / f"axonry-task-{sid}.tar.gz"
