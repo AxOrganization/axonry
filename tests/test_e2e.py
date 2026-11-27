@@ -1088,7 +1088,8 @@ def test_the_owner_runs_a_failed_entry_again_at_its_priority(tmp_path):
     clock.t += int(1.5 * 3600)
     orch.supervise()
     orch.d.fleet.release(sa)
-    assert "(now `Qwen/" in orch.d.runner.bundles[sa][1]          # none has won yet: the base model is the champion
+    names, brief_md = orch.d.runner.bundles[sa]
+    assert "(now `0000000000-0000`)" in brief_md and "0000000000-0000/edit/edit.json" in names   # the base, as an entry
     orch._reject(sa, "NO_UPLOAD", "no manifest.json uploaded", final_status="FAILED")   # as the run's end would
     assert orch.d.github.prs[1]["state"] == "closed"
     before = orch.db.accounts()[COLDKEYS["A"]]["charged_usd"]
@@ -1923,12 +1924,14 @@ def test_a_run_is_told_the_champion_it_must_beat_and_gets_its_edit(tmp_path):
 
 def test_a_parent_can_be_the_champion_when_the_run_starts(tmp_path):
     orch, chain, clock, pub = make(tmp_path)
-    pay(orch, chain, "A", 101, 1, parent="champion")         # no champion yet: from the base model
+    pay(orch, chain, "A", 101, 1, parent="champion")         # no champion yet: the base model is, as an entry
     chain.head = 101
     open_rules(orch, 101)
     run_until_quiet(orch, clock, rounds=6)
     sb = "0000000101-0001"
-    assert orch.db.sub(sb)["reason_code"] == "NEW_CHAMPION" and not orch.d.runner.saw_parent[sb]
+    assert orch.db.sub(sb)["reason_code"] == "NEW_CHAMPION" and orch.d.runner.saw_parent[sb]
+    assert orch.db.sub(sb)["record"]["parent"] is None                    # built on the base model itself
+    assert json.loads(pub.get(layout.submission_edit_prefix(sb) + "edit.json"))["parent"] == "0000000000-0000"
     pay(orch, chain, "E", 110, 1, parent="champion")          # now the champion is A's entry: E starts from it
     chain.head = 110
     orch.intake()

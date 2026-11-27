@@ -569,11 +569,12 @@ class Orchestrator:
                                                 "host_key": m.jump.host_key()}},
                 "r2": creds.as_dict(),
                 "limits": brief.limits_from(self.d.comp_rules, base.get("hidden_size")),
-                "judge": self._judge_view(rules, rec, base),
+                "judge": self._judge_view(rules, rec),
                 "base_name": registry.base_name(base)}
-        champ = (self.db.champion(rec["base"]) or {}).get("sid")
-        task["starts"] = ([{"sid": rec["parent"], "role": "parent"}] if rec.get("parent") else []) + \
-            ([{"sid": champ, "role": "champion"}] if champ and champ != rec.get("parent") else [])
+        champ = task["judge"]["champion"]             # an entry, or the base model as its line's first entry
+        parent = rec.get("parent") or (champ if rec.get("parent_is_champion") else None)
+        task["starts"] = ([{"sid": parent, "role": "parent"}] if parent else []) + \
+            ([{"sid": champ, "role": "champion"}] if champ != parent else [])
         bundle = self._bundle(task, blobs)   # the only place the run's secrets go
         busy = [RunHandle(**self.db.run(r["sid"])["handle"]) for r in self.db.subs(status=("RUNNING",))]
         h = self.d.runner.prepare(sid, s["hotkey"], busy)
@@ -583,11 +584,25 @@ class Orchestrator:
             "timeline": {**rec["timeline"], "kickoff": start, "deadline": deadline},
             "sandbox": {"resources": resources}})
 
-    def _judge_view(self, rules, rec, base) -> dict:
+    def _judge_view(self, rules, rec) -> dict:
         """What the run is judged against: its rules' wins needed and the champion when it starts (until an entry
-        wins, the base model, by its full name)."""
+        wins, the base model as its line's first entry)."""
         champ = self.db.champion(rec["base"])
-        return {"n_win": rules["judge"]["n_win"], "champion": champ["sid"] if champ else registry.base_name(base)}
+        return {"n_win": rules["judge"]["n_win"], "champion": champ["sid"] if champ else self._base_entry(rec["base"])}
+
+    def _base_entry(self, base) -> str:
+        """The base model as an entry of its own line, the champion until an entry wins: an id no commitment takes
+        (index 0 of the line's opening block: a block's first extrinsic is its timestamp), its edit no ops on the
+        base. Runs can start from it, and build on it, as on any champion."""
+        return f"{registry.load_rules_versions(base, self.d.registry_root)[0].doc.get('open_block', 0):010d}-0000"
+
+    def _base_edit(self, base, dest: Path):
+        doc = registry.load_base(base, self.d.registry_root)
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "edit.json").write_text(json.dumps({"base": base, "parent": registry.base_name(doc), "ops": []},
+                                                   indent=1))
+        (dest / "REPORT.md").write_text(f"The base model {registry.base_name(doc)} itself: no ops. The champion of "
+                                        f"the {base} line until an entry wins.\n")
 
     def _bundle_path(self, sid) -> Path:
         return Path(self.d.work_dir) / sid / f"axonry-task-{sid}.tar.gz"
@@ -610,7 +625,7 @@ class Orchestrator:
             for start in task["starts"]:       # each start under its id, its full published chain included
                 chain = d / f"{start['sid']}_chain"
                 shutil.rmtree(chain, ignore_errors=True)
-                self._materialize_chain(start["sid"], chain)
+                self._materialize_chain(start["sid"], chain, base=task["base"])
                 for p in sorted(chain.rglob("*")):
                     if p.is_file():
                         add(f"{start['sid']}/edit/{p.relative_to(chain).as_posix()}", p.read_bytes())
@@ -769,14 +784,15 @@ class Orchestrator:
                 self._publish_agent(sid, rec)
                 self._reject(sid, "REJECTED_RULES", parent_problem)
                 continue
-            if ref.get("sid") != rec.get("parent"):    # what the edit actually stacks on is its parent
-                self.db.update(sid, record_patch={"parent": ref.get("sid")})
+            own = None if ref.get("sid") == self._base_entry(rec["base"]) else ref.get("sid")
+            if own != rec.get("parent"):    # what the edit actually stacks on is its parent (the base entry: none)
+                self.db.update(sid, record_patch={"parent": own})
                 rec = self.db.sub(sid)["record"]
             build_dir = Path(self.d.work_dir) / sid / "build"
             shutil.rmtree(build_dir, ignore_errors=True)
             shutil.copytree(edit, build_dir)
             if ref:     # the published chain where the spec names it (not uploaded: it is public already)
-                self._materialize_chain(ref["sid"], build_dir / ref["sid"] / "edit")
+                self._materialize_chain(ref["sid"], build_dir / ref["sid"] / "edit", base=rec["base"])
             ready = self._eval_ready()
             if not ready:
                 continue                       # eval_machine is renting or setting one up
@@ -818,7 +834,7 @@ class Orchestrator:
         named = " or ".join([*(repr(s) for s in starts), repr(task["base_name"])])
         return {}, f"edit.json parent must be {named}, not {ref!r}"
 
-    def _materialize_chain(self, sid, dest: Path, as_admitted=False):
+    def _materialize_chain(self, sid, dest: Path, as_admitted=False, base=None):
         """A published edit with its whole chain, as the toolkit builds it: submissions/<sid>/edit/ into dest, the
         edit it stacks on where its spec names it (a sid: dest/<sid>/edit/; an earlier path such as
         "parent/edit.json": there), and so on down the chain. A champion's archive form instead, when it has one: its
@@ -826,7 +842,11 @@ class Orchestrator:
         as_admitted, for the entry itself, whose admission is redone (its own edit, within the edit limits; the edits
         below it may be archives)."""
         dest = Path(dest)
-        rec = (self.db.sub(sid) or {}).get("record", {})
+        sub = self.db.sub(sid)
+        base = sub["base"] if sub else base
+        if sub is None and base and sid == self._base_entry(base):
+            return self._base_edit(base, dest)
+        rec = (sub or {}).get("record", {})
         edit, flat = layout.submission_edit_prefix(sid), layout.submission_flat_prefix(sid)
         archived = rec.get("flat") and not as_admitted
         keys = ([(k, flat) for k, _ in self.d.public.list(flat)] + [(edit + "REPORT.md", edit)] if archived
@@ -837,9 +857,9 @@ class Orchestrator:
                 (dest / k[len(prefix):]).parent.mkdir(parents=True, exist_ok=True)
                 (dest / k[len(prefix):]).write_bytes(data)
         ref = json.loads((dest / "edit.json").read_text()).get("parent")
-        if rec.get("parent") and ref and not archived:
+        if ref and not archived and (rec.get("parent") or ref == self._base_entry(base)):
             where = dest / Path(ref).parent if ref.endswith(".json") else dest / ref / "edit"
-            self._materialize_chain(rec["parent"], where)
+            self._materialize_chain(rec.get("parent") or ref, where, base=base)
 
     def archive(self):
         """Each champion's archive form, once: its whole chain as one edit on the base (wsp.edits.flatten_chain),
