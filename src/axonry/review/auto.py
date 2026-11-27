@@ -232,7 +232,8 @@ def run(reader, gh, rules, work: Path, command=DEFAULT_COMMAND, interval=60, onc
             reviewed = True
             try:
                 ws = prepare(gh, item, st.get("contents", []), rules, work, ideas, reader,
-                             (st.get("champion") or {}).get("sid"))
+                             next(((ln.get("champion") or {}).get("sid") for ln in st.get("lines", [])
+                                   if ln["base"] == item.get("base")), (st.get("champion") or {}).get("sid")))
                 v = ask_model(ws, command)
                 event, body = review_body(v, item)
                 gh.post_review(item["pr"], item["commit"], event, body)
