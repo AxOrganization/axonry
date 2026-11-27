@@ -1088,7 +1088,7 @@ def test_the_owner_runs_a_failed_entry_again_at_its_priority(tmp_path):
     clock.t += int(1.5 * 3600)
     orch.supervise()
     orch.d.fleet.release(sa)
-    assert "the champion is the base model itself" in orch.d.runner.bundles[sa][1]       # none has won yet
+    assert "(now `Qwen/" in orch.d.runner.bundles[sa][1]          # none has won yet: the base model is the champion
     orch._reject(sa, "NO_UPLOAD", "no manifest.json uploaded", final_status="FAILED")   # as the run's end would
     assert orch.d.github.prs[1]["state"] == "closed"
     before = orch.db.accounts()[COLDKEYS["A"]]["charged_usd"]

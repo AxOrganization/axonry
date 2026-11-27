@@ -35,13 +35,9 @@ def _parent(task) -> str:
             "on one, copy it to the sandbox under the same name next to task.json (where `axonry-check` looks for it) "
             "and start the case from it (`python -m wsp.case init <case> ... --parent <id>/edit/edit.json`): your edit "
             "is a new layer on that model, and the limits apply to your own ops, measured against it.\n") if starts else ""
-    base_champ = ("No entry has beaten the base model on this line yet, so **the champion is the base model itself**: "
-                  "wherever METHOD.md says to start from, build on or compare with the champion, use the base model "
-                  "(and the base model's results). This is not a reason to stop.\n"
-                  if task.get("judge") and not task["judge"]["champion"] else "")
     return f"""
 ## Starting point
-{have}{base_champ}Your `edit.json` always names what it starts from in `"parent"`: the id of a published edit of this bundle
+{have}Your `edit.json` always names what it starts from in `"parent"`: the id of a published edit of this bundle
 (`"<id>"`), or `"{task.get('base_name')}"` for the base model.
 """
 
@@ -50,7 +46,7 @@ def _judged(task) -> str:
     j = task.get("judge")
     if not j:
         return ""
-    now = f"now `{j['champion']}`" if j["champion"] else "the base model itself: no entry has beaten it yet"
+    now = f"now `{j['champion'] or task.get('base_name')}`"      # until an entry wins, the base model holds the title
     return f"""
 ## How the edit is judged
 Against the champion when it is judged ({now}), on the benchmarks: the edit must be worse on none of them (beyond their noise) and clearly better on at least {j['n_win']}.
